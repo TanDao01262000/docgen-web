@@ -1258,5 +1258,155 @@ function parseSummaryFromPdfText(text, hotels){
   return parseSummary(wb, hotels);
 }
 
-global.Voucher={parseSummary,parseSummaryFromPdfText,loadHotels,saveHotelExtra,matchHotel,hotelBlock,todayVN,norm,renderVoucherDoc,mergeHotels,geminiHotelLookup,serperHotelLookup,tavilyHotelLookup,resolveHotelContact,enrichMissingHotels,hotelCacheGet,shortenAddress,canonicalCity,parseMeals,aptCode,dateKey,parseGuestsFromClients,parseGuestsFromGt,formatGuestLine,loadSupabaseOverrides,supabaseUpsertOverride,supabaseLogCorrection,supabaseEnabled,matchOverride};
+
+/* ---- Generation history ---- */
+const PASSPORT_RE=/\b(?:passport|pass\s*no|pp\s*no|id\s*no|cmnd|cccd|national\s*id)[:\s#]*[A-Z0-9]{5,}\b/ig;
+const IDISH_RE=/\b[A-Z]{1,2}\d{6,9}\b/g; // common passport-ish tokens in free text
+function scrubPII(val){
+  if(val==null) return val;
+  if(typeof val==='string'){
+    let s=val.replace(PASSPORT_RE,'[redacted]');
+    // Only scrub standalone ID-looking tokens when near identity keywords
+    if(/passport|cmnd|cccd|id\s*no|pass\s*no/i.test(s))
+      s=s.replace(IDISH_RE,'[redacted]');
+    return s;
+  }
+  if(Array.isArray(val)) return val.map(scrubPII);
+  if(typeof val==='object'){
+    const out={};
+    for(const [k,v] of Object.entries(val)){
+      if(/passport|cmnd|cccd|id_number|idNumber|national_id/i.test(k)) continue;
+      out[k]=scrubPII(v);
+    }
+    return out;
+  }
+  return val;
+}
+function sanitizeReviewData(data){
+  if(!data||typeof data!=='object') return {};
+  // Drop heavy / internal blobs; keep what regenerate needs
+  const keep={
+    update_date: data.update_date||'',
+    payment: data.payment||'ALL FULLY PREPAID BY CK GO2',
+    meal: data.meal||'',
+    guests: data.guests||[],
+    guest_lines: data.guest_lines||'',
+    pax: data.pax||'',
+    contact: data.contact||'',
+    surname: data.surname||'',
+    acc_rows: data.acc_rows||[],
+    trf_rows: data.trf_rows||[],
+    flags: (data.flags||[]).map(f=>({level:f.level, msg:f.msg})),
+    _source: data._source||'',
+    _summary_filename: data._summary_filename||'',
+    _booking_ref: data._booking_ref||''
+  };
+  return scrubPII(keep);
+}
+function deriveTripDates(data){
+  const dates=[];
+  for(const r of (data.acc_rows||[])){
+    if(r.check_in) dates.push(String(r.check_in).split('\n')[0]);
+    if(r.check_out) dates.push(String(r.check_out).split('\n')[0]);
+  }
+  for(const r of (data.trf_rows||[])){
+    if(r.date) dates.push(String(r.date).split('\n')[0]);
+  }
+  const uniq=[...new Set(dates.map(d=>d.trim()).filter(Boolean))];
+  if(!uniq.length) return '';
+  if(uniq.length===1) return uniq[0];
+  return uniq[0]+' → '+uniq[uniq.length-1];
+}
+function deriveHotelList(data){
+  const names=[];
+  for(const r of (data.acc_rows||[])){
+    if(r.is_train) continue;
+    const n=(r.matched_name||r.hotel_name||'').trim();
+    if(n) names.push(n);
+  }
+  return [...new Set(names)].join(', ');
+}
+function deriveBookingRef(data){
+  if(data._booking_ref) return String(data._booking_ref);
+  // Try reservation codes from hotel notes / rows
+  for(const r of (data.acc_rows||[])){
+    const blob=[r.note,r.reservation,r.hotel_block].join(' ');
+    const m=blob.match(/\b(?:CFM|BK|HTL|RES|VR)\s*[#:\-]?\s*([A-Z0-9\-]{4,})\b/i)
+      || blob.match(/\b([A-Z]{2,}\d{4,}|\d{6,})\b/);
+    if(m) return m[1]||m[0];
+  }
+  return '';
+}
+function deriveGuestLabel(data){
+  const g=(data.guests||[])[0]||'';
+  return String(g).replace(/\s+/g,' ').trim().slice(0,80);
+}
+async function saveGeneration(meta){
+  if(!supabaseEnabled()) return {ok:false, reason:'disabled'};
+  const data=meta.data||{};
+  const row={
+    summary_filename: meta.summary_filename||data._summary_filename||'',
+    booking_ref: meta.booking_ref||deriveBookingRef(data)||'',
+    trip_dates: meta.trip_dates||deriveTripDates(data)||'',
+    hotel_list: meta.hotel_list||deriveHotelList(data)||'',
+    guest_label: meta.guest_label||deriveGuestLabel(data)||'',
+    review_data: sanitizeReviewData(data),
+    status: meta.status||'open'
+  };
+  const res=await supabaseFetch('generations',{
+    method:'POST',
+    headers:{'Prefer':'return=representation'},
+    body:JSON.stringify(row)
+  });
+  if(!res||!res.ok) return {ok:false, reason:'insert_failed', res};
+  const saved=Array.isArray(res.data)?res.data[0]:res.data;
+  return {ok:true, generation:saved};
+}
+async function listGenerations(limit){
+  if(!supabaseEnabled()) return {ok:false, reason:'disabled', rows:[]};
+  const lim=Math.min(Math.max(limit||50,1),200);
+  const res=await supabaseFetch('generations?select=id,created_at,summary_filename,booking_ref,trip_dates,hotel_list,guest_label,status&order=created_at.desc&limit='+lim);
+  if(!res) return {ok:false, reason:'offline', rows:[]};
+  if(!res.ok) return {ok:false, reason:'http', rows:[], status:res.status};
+  return {ok:true, rows:Array.isArray(res.data)?res.data:[]};
+}
+async function getGeneration(id){
+  if(!supabaseEnabled()) return {ok:false, reason:'disabled'};
+  const res=await supabaseFetch('generations?id=eq.'+encodeURIComponent(id)+'&select=*');
+  if(!res||!res.ok) return {ok:false, reason:'fetch_failed'};
+  const row=Array.isArray(res.data)?res.data[0]:null;
+  if(!row) return {ok:false, reason:'not_found'};
+  return {ok:true, generation:row};
+}
+async function updateGenerationStatus(id, status){
+  if(!supabaseEnabled()) return {ok:false, reason:'disabled'};
+  const res=await supabaseFetch('generations?id=eq.'+encodeURIComponent(id),{
+    method:'PATCH',
+    headers:{'Prefer':'return=representation'},
+    body:JSON.stringify({status})
+  });
+  return {ok:!!(res&&res.ok), res};
+}
+async function listGenerationComments(generationId){
+  if(!supabaseEnabled()) return {ok:false, reason:'disabled', rows:[]};
+  const res=await supabaseFetch('generation_comments?generation_id=eq.'+encodeURIComponent(generationId)+'&select=*&order=created_at.asc');
+  if(!res) return {ok:false, reason:'offline', rows:[]};
+  if(!res.ok) return {ok:false, reason:'http', rows:[]};
+  return {ok:true, rows:Array.isArray(res.data)?res.data:[]};
+}
+async function addGenerationComment(generationId, commentText){
+  if(!supabaseEnabled()) return {ok:false, reason:'disabled'};
+  const text=String(commentText||'').trim();
+  if(!text) return {ok:false, reason:'empty'};
+  const res=await supabaseFetch('generation_comments',{
+    method:'POST',
+    headers:{'Prefer':'return=representation'},
+    body:JSON.stringify({generation_id:generationId, comment_text:text, resolved:false, admin_reply:''})
+  });
+  if(!res||!res.ok) return {ok:false, reason:'insert_failed', res};
+  const row=Array.isArray(res.data)?res.data[0]:res.data;
+  return {ok:true, comment:row};
+}
+
+global.Voucher={parseSummary,parseSummaryFromPdfText,loadHotels,saveHotelExtra,matchHotel,hotelBlock,todayVN,norm,renderVoucherDoc,mergeHotels,geminiHotelLookup,serperHotelLookup,tavilyHotelLookup,resolveHotelContact,enrichMissingHotels,hotelCacheGet,shortenAddress,canonicalCity,parseMeals,aptCode,dateKey,parseGuestsFromClients,parseGuestsFromGt,formatGuestLine,loadSupabaseOverrides,supabaseUpsertOverride,supabaseLogCorrection,supabaseEnabled,matchOverride,sanitizeReviewData,saveGeneration,listGenerations,getGeneration,updateGenerationStatus,listGenerationComments,addGenerationComment,deriveTripDates,deriveHotelList,deriveBookingRef};
 })(window);

@@ -176,6 +176,22 @@ details.card>summary{cursor:pointer; font-weight:600}
   table{font-size:12px}
   #toasts{left:12px; right:12px; max-width:none}
 }
+
+.hist-list{display:flex; flex-direction:column; gap:8px}
+.hist-item{border:1px solid var(--line); border-radius:12px; padding:12px 14px; background:#fff; cursor:pointer; transition:.15s}
+.hist-item:hover{border-color:var(--accent); box-shadow:0 0 0 3px var(--accent-soft)}
+.hist-item.active{border-color:var(--accent); background:var(--accent-soft)}
+.hist-item .top{display:flex; justify-content:space-between; gap:8px; flex-wrap:wrap; align-items:baseline}
+.hist-item .meta{font-size:12px; color:var(--muted); margin-top:4px}
+.hist-status{font-size:11px; font-weight:600; padding:2px 8px; border-radius:999px}
+.hist-status.open{background:#fff7ed; color:#c2410c; border:1px solid #fed7aa}
+.hist-status.fixed{background:#ecfdf5; color:#047857; border:1px solid #a7f3d0}
+.comment{border:1px solid var(--line); border-radius:10px; padding:10px 12px; margin:8px 0; background:#fafafa}
+.comment .cmeta{font-size:12px; color:var(--muted); margin-bottom:4px}
+.comment.resolved{opacity:.85; border-color:#a7f3d0}
+.comment .reply{margin-top:8px; padding:8px 10px; background:#eff6ff; border-radius:8px; border:1px solid #bfdbfe; font-size:13px}
+#modeHistory{display:none}
+
 </style>
 </head>
 <body>
@@ -197,6 +213,7 @@ details.card>summary{cursor:pointer; font-weight:600}
     <div class="mode-switch">
       <label><input type="radio" name="mode" value="generic" onchange="setMode(this.value)"> <span data-i="mode_g">Chế độ chung</span></label>
       <label><input type="radio" name="mode" value="voucher" checked onchange="setMode(this.value)"> <span data-i="mode_v">Chế độ Voucher</span></label>
+      <label><input type="radio" name="mode" value="history" onchange="setMode(this.value)"> <span data-i="mode_h">Lịch sử</span></label>
     </div>
   </div>
 
@@ -268,6 +285,37 @@ details.card>summary{cursor:pointer; font-weight:600}
     </div>
   </div>
 
+  <div id="modeHistory">
+    <div class="card">
+      <h2 data-i="h_title">Lịch sử tạo voucher</h2>
+      <p class="lede" data-i="h_lede">Các lần tạo gần đây (mới nhất trước). Bấm một dòng để xem chi tiết, tải lại hoặc góp ý.</p>
+      <div class="row">
+        <button class="sec" onclick="histRefresh()" data-i="h_refresh">Làm mới</button>
+        <span id="histStatus" class="muted"></span>
+      </div>
+      <div id="histList" class="hist-list" style="margin-top:12px"></div>
+    </div>
+    <div class="card dim" id="histDetailCard">
+      <h2 data-i="h_detail">Chi tiết</h2>
+      <div id="histDetail" class="muted" data-i="h_pick">Chọn một mục bên trên.</div>
+      <div id="histActions" style="display:none;margin-top:12px">
+        <div class="row">
+          <button onclick="histRedownload()" data-i="h_redl">Tải lại 2 voucher</button>
+          <button class="sec" onclick="histMarkFixed()" data-i="h_fixed">Đánh dấu đã sửa</button>
+          <button class="sec" onclick="histMarkOpen()" data-i="h_open">Đánh dấu còn mở</button>
+        </div>
+        <div class="section-title" data-i="h_comments">Góp ý</div>
+        <div id="histComments"></div>
+        <div class="field" style="margin-top:8px">
+          <label data-i="h_addc">Thêm góp ý</label>
+          <textarea id="histCommentText" rows="3" placeholder="..."></textarea>
+        </div>
+        <button class="sec" onclick="histAddComment()" data-i="h_sendc">Gửi góp ý</button>
+      </div>
+    </div>
+  </div>
+
+
 </main>
 <div id="toasts"></div>
 <script>
@@ -307,6 +355,26 @@ I.vi.step1='Tải lên';I.en.step1='Upload';
 I.vi.step2='Kiểm tra';I.en.step2='Review';
 I.vi.step3='Tải về';I.en.step3='Download';
 I.vi.v3='3. Tạo & tải voucher';I.en.v3='3. Generate & download';
+
+I.vi.mode_h='Lịch sử';I.en.mode_h='History';
+I.vi.h_title='Lịch sử tạo voucher';I.en.h_title='Generation history';
+I.vi.h_lede='Các lần tạo gần đây (mới nhất trước). Bấm một dòng để xem chi tiết, tải lại hoặc góp ý.';I.en.h_lede='Recent generations (newest first). Open one to re-download or leave a comment.';
+I.vi.h_refresh='Làm mới';I.en.h_refresh='Refresh';
+I.vi.h_detail='Chi tiết';I.en.h_detail='Details';
+I.vi.h_pick='Chọn một mục bên trên.';I.en.h_pick='Pick an item above.';
+I.vi.h_redl='Tải lại 2 voucher';I.en.h_redl='Re-download 2 vouchers';
+I.vi.h_fixed='Đánh dấu đã sửa';I.en.h_fixed='Mark fixed';
+I.vi.h_open='Đánh dấu còn mở';I.en.h_open='Mark open';
+I.vi.h_comments='Góp ý';I.en.h_comments='Comments';
+I.vi.h_addc='Thêm góp ý';I.en.h_addc='Add comment';
+I.vi.h_sendc='Gửi góp ý';I.en.h_sendc='Send comment';
+I.vi.h_empty='Chưa có lần tạo nào.';I.en.h_empty='No generations yet.';
+I.vi.h_offline='Không kết nối được Supabase — lịch sử tạm thời không khả dụng.';I.en.h_offline='Supabase unreachable — history unavailable offline.';
+I.vi.h_saved='Đã lưu vào lịch sử';I.en.h_saved='Saved to history';
+I.vi.h_resolved='đã xử lý';I.en.h_resolved='resolved';
+I.vi.h_unresolved='còn mở';I.en.h_unresolved='open';
+I.vi.h_admin='Phản hồi';I.en.h_admin='Reply';
+
 I.vi.brand='DocGen';I.en.brand='DocGen';
 I.vi.nofile='Chưa chọn file';I.en.nofile='No file chosen';
 
@@ -393,7 +461,13 @@ async function gen(){const files=[];
 try{ localStorage.removeItem('prov'); localStorage.removeItem('key'); }catch(_){}
 
 let VDATA=null, VHOTELS=[];
-function setMode(m){modeGeneric.style.display=m==='generic'?'block':'none';modeVoucher.style.display=m==='voucher'?'block':'none'}
+function setMode(m){
+  modeGeneric.style.display=m==='generic'?'block':'none';
+  modeVoucher.style.display=m==='voucher'?'block':'none';
+  const mh=document.getElementById('modeHistory');
+  if(mh) mh.style.display=m==='history'?'block':'none';
+  if(m==='history') histRefresh();
+}
 function voucherReady(){
   return !!(VDATA && Array.isArray(VDATA.acc_rows) && Array.isArray(VDATA.trf_rows));
 }
@@ -426,11 +500,11 @@ async function vExtract(){
       const {text,ocr}=await readPdf(buf);
       if(!String(text||'').trim()) throw new Error(LANG==='vi'?'Không đọc được chữ từ PDF':'No text extracted from PDF');
       VDATA=Voucher.parseSummaryFromPdfText(text, VHOTELS);
-      VDATA._source='pdf'; VDATA._ocr=ocr;
+      VDATA._source='pdf'; VDATA._ocr=ocr; VDATA._summary_filename=(vfile.files[0]&&vfile.files[0].name)||'';
     } else {
       const wb=XLSX.read(buf);
       VDATA=Voucher.parseSummary(wb, VHOTELS);
-      VDATA._source='xlsx';
+      VDATA._source='xlsx'; VDATA._summary_filename=(vfile.files[0]&&vfile.files[0].name)||'';
     }
 
     // Stamp learned badge when hotel came from Supabase override
@@ -601,6 +675,14 @@ async function vGen(){
     vinfo.textContent=(LANG==='vi'?'Đã tạo vouchers.zip':'Downloaded vouchers.zip');
     setStep(3);
     toast(LANG==='vi'?'Đã tải vouchers.zip':'Downloaded vouchers.zip','ok');
+    // Save to History (graceful if offline)
+    try{
+      const saved=await Voucher.saveGeneration({data:VDATA, summary_filename:VDATA._summary_filename||((vfile.files[0]&&vfile.files[0].name)||'')});
+      if(saved&&saved.ok){
+        VDATA._generation_id=saved.generation&&saved.generation.id;
+        toast(t('h_saved')||'Saved to history','ok');
+      }
+    }catch(e){ console.warn('history save failed', e); }
   }catch(e){
     console.error(e);
     toast((LANG==='vi'?'Lỗi khi tạo voucher: ':'Generate error: ')+(e.message||e),'err');
@@ -608,6 +690,149 @@ async function vGen(){
     const gbtn=document.getElementById('vgenbtn'); if(gbtn){gbtn.disabled=false;gbtn.classList.remove('loading');}
   }
 }
+
+/* ---- History tab ---- */
+let HIST_ROWS=[], HIST_SEL=null;
+function histFmtTime(iso){
+  try{
+    const d=new Date(iso);
+    return d.toLocaleString(LANG==='vi'?'vi-VN':'en-US',{timeZone:'America/Los_Angeles', dateStyle:'medium', timeStyle:'short'})+' PT';
+  }catch(e){ return iso||''; }
+}
+async function histRefresh(){
+  const list=document.getElementById('histList');
+  const st=document.getElementById('histStatus');
+  if(st) st.textContent=(LANG==='vi'?'Đang tải...':'Loading...');
+  if(!Voucher.supabaseEnabled()){
+    if(st) st.textContent='';
+    if(list) list.innerHTML=`<div class="badge badge-warn">${t('h_offline')}</div>`;
+    return;
+  }
+  const res=await Voucher.listGenerations(80);
+  if(!res.ok){
+    if(st) st.textContent='';
+    if(list) list.innerHTML=`<div class="badge badge-warn">${t('h_offline')}</div>`;
+    return;
+  }
+  HIST_ROWS=res.rows||[];
+  if(st) st.textContent=(LANG==='vi'?`${HIST_ROWS.length} mục`:`${HIST_ROWS.length} items`);
+  if(!HIST_ROWS.length){
+    list.innerHTML=`<div class="muted">${t('h_empty')}</div>`;
+    return;
+  }
+  list.innerHTML=HIST_ROWS.map(r=>{
+    const stCls=r.status==='fixed'?'fixed':'open';
+    const stLab=r.status==='fixed'?(LANG==='vi'?'đã sửa':'fixed'):(LANG==='vi'?'còn mở':'open');
+    const title=(r.guest_label||r.booking_ref||r.summary_filename||r.id||'').slice(0,60);
+    return `<div class="hist-item${HIST_SEL&&HIST_SEL.id===r.id?' active':''}" onclick="histOpen('${r.id}')">
+      <div class="top"><strong>${title.replace(/</g,'&lt;')}</strong><span class="hist-status ${stCls}">${stLab}</span></div>
+      <div class="meta">${histFmtTime(r.created_at)} · ${(r.trip_dates||'—').replace(/</g,'&lt;')}</div>
+      <div class="meta">${(r.hotel_list||'').replace(/</g,'&lt;')||'—'}${r.summary_filename?' · '+String(r.summary_filename).replace(/</g,'&lt;'):''}</div>
+    </div>`;
+  }).join('');
+}
+async function histOpen(id){
+  const card=document.getElementById('histDetailCard');
+  const detail=document.getElementById('histDetail');
+  const actions=document.getElementById('histActions');
+  if(card) card.classList.remove('dim');
+  detail.textContent=(LANG==='vi'?'Đang tải...':'Loading...');
+  actions.style.display='none';
+  const res=await Voucher.getGeneration(id);
+  if(!res.ok){ detail.textContent=t('h_offline'); return; }
+  HIST_SEL=res.generation;
+  histRefresh(); // re-highlight
+  const g=HIST_SEL;
+  const rd=g.review_data||{};
+  detail.innerHTML=`
+    <div><b>${(g.guest_label||'').replace(/</g,'&lt;')||'—'}</b></div>
+    <div class="meta">${histFmtTime(g.created_at)}</div>
+    <div style="margin-top:8px"><b data-i="noop">File:</b> ${(g.summary_filename||'—').replace(/</g,'&lt;')}</div>
+    <div><b>Booking / tour:</b> ${(g.booking_ref||'—').replace(/</g,'&lt;')}</div>
+    <div><b>${LANG==='vi'?'Ngày đi':'Trip dates'}:</b> ${(g.trip_dates||'—').replace(/</g,'&lt;')}</div>
+    <div><b>${LANG==='vi'?'Khách sạn':'Hotels'}:</b> ${(g.hotel_list||'—').replace(/</g,'&lt;')}</div>
+    <div><b>Pax:</b> ${(rd.pax||'—')}</div>
+    <div><b>Status:</b> <span class="hist-status ${g.status==='fixed'?'fixed':'open'}">${g.status}</span></div>
+  `;
+  actions.style.display='block';
+  await histDrawComments();
+}
+async function histDrawComments(){
+  const host=document.getElementById('histComments');
+  if(!HIST_SEL){ host.innerHTML=''; return; }
+  const res=await Voucher.listGenerationComments(HIST_SEL.id);
+  const rows=res.rows||[];
+  if(!rows.length){ host.innerHTML=`<div class="muted">${LANG==='vi'?'Chưa có góp ý.':'No comments yet.'}</div>`; return; }
+  host.innerHTML=rows.map(c=>{
+    const st=c.resolved?t('h_resolved'):t('h_unresolved');
+    const cls=c.resolved?'comment resolved':'comment';
+    const reply=c.admin_reply?`<div class="reply"><b>${t('h_admin')}:</b> ${String(c.admin_reply).replace(/</g,'&lt;')}</div>`:'';
+    return `<div class="${cls}"><div class="cmeta">${histFmtTime(c.created_at)} · <b>${st}</b></div><div>${String(c.comment_text||'').replace(/</g,'&lt;')}</div>${reply}</div>`;
+  }).join('');
+}
+async function histAddComment(){
+  if(!HIST_SEL) return;
+  const ta=document.getElementById('histCommentText');
+  const text=(ta&&ta.value||'').trim();
+  if(!text) return toast(LANG==='vi'?'Nhập góp ý trước':'Enter a comment first','warn');
+  const res=await Voucher.addGenerationComment(HIST_SEL.id, text);
+  if(!res.ok) return toast(t('h_offline'),'err');
+  if(ta) ta.value='';
+  toast(LANG==='vi'?'Đã gửi góp ý':'Comment sent','ok');
+  await histDrawComments();
+}
+async function histMarkFixed(){
+  if(!HIST_SEL) return;
+  const r=await Voucher.updateGenerationStatus(HIST_SEL.id,'fixed');
+  if(!r.ok) return toast(t('h_offline'),'err');
+  HIST_SEL.status='fixed'; toast('OK','ok'); histRefresh(); histOpen(HIST_SEL.id);
+}
+async function histMarkOpen(){
+  if(!HIST_SEL) return;
+  const r=await Voucher.updateGenerationStatus(HIST_SEL.id,'open');
+  if(!r.ok) return toast(t('h_offline'),'err');
+  HIST_SEL.status='open'; toast('OK','ok'); histRefresh(); histOpen(HIST_SEL.id);
+}
+async function histRedownload(){
+  if(!HIST_SEL||!HIST_SEL.review_data) return toast(t('h_offline'),'err');
+  try{
+    const data={...HIST_SEL.review_data};
+    // Rebuild print rows like vGen
+    data.guests=data.guests||(data.guest_lines||'').split('\n').filter(Boolean);
+    data.guest_lines=(data.guests||[]).join('\n');
+    if(!data.payment) data.payment='ALL FULLY PREPAID BY CK GO2';
+    data.acc_print_rows=[];
+    const acc=data.acc_rows||[];
+    for(let i=0;i<acc.length;i++){
+      const r=acc[i];
+      const is_train=!!r.is_train;
+      const is_hotel=!!r.is_hotel && !is_train;
+      const prevTrain=i>0 && !!acc[i-1].is_train;
+      if(is_train){
+        data.acc_print_rows.push({is_hdr:false, is_data:false, is_train:true, train_text:r.train_text||''});
+      } else if(is_hotel){
+        if(is_hotel && !prevTrain) data.acc_print_rows.push({is_hdr:true, is_data:false, is_train:false});
+        data.acc_print_rows.push({is_hdr:false, is_data:true, is_train:false, city:r.city||'', check_in:r.check_in||'', check_out:r.check_out||'', hotel_block:r.hotel_block||'', note:r.note||''});
+      }
+    }
+    data.trf_print_rows=[];
+    for(const r of (data.trf_rows||[])){
+      data.trf_print_rows.push({is_hdr:true, is_data:false});
+      data.trf_print_rows.push({is_hdr:false, is_data:true, label:r.label||'', date:r.date||'', where_from:r.where_from||'', where_to:r.where_to||'', note:r.note||''});
+    }
+    const a=await Voucher.renderVoucherDoc('voucher_accommodation.docx', data);
+    const b=await Voucher.renderVoucherDoc('voucher_transfers.docx', data);
+    const z=new JSZip(); z.file('VOUCHER-ACCOMMODATION.docx',a); z.file('VOUCHER-TRANSFERS.docx',b);
+    const blob=await z.generateAsync({type:'blob'});
+    const link=document.createElement('a'); link.href=URL.createObjectURL(blob); link.download='vouchers.zip'; link.click();
+    toast(LANG==='vi'?'Đã tải lại vouchers.zip':'Re-downloaded vouchers.zip','ok');
+  }catch(e){
+    console.error(e);
+    toast((LANG==='vi'?'Lỗi tải lại: ':'Redownload error: ')+(e.message||e),'err');
+  }
+}
+
+
 function bindDrop(zoneId, inputId){
   const zone=document.getElementById(zoneId), inp=document.getElementById(inputId);
   if(!zone||!inp) return;
