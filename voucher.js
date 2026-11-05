@@ -394,6 +394,68 @@ async function renderVoucherDoc(templateName, data){
 }
 
 
+
+function hotelCacheGet(){ try{return JSON.parse(localStorage.hotelCache||'{}')}catch(e){return {}} }
+function hotelCacheSet(key, hotel){
+  const c=hotelCacheGet(); c[norm(key)]=hotel; localStorage.hotelCache=JSON.stringify(c);
+}
+function cacheLookup(query){
+  const c=hotelCacheGet(); const n=norm(query);
+  if(c[n]) return c[n];
+  for(const [k,v] of Object.entries(c)){
+    if(n.includes(k)||k.includes(n)||norm(v.name||'').includes(n)||n.includes(norm(v.name||''))) return v;
+  }
+  return null;
+}
+
+async function serperHotelLookup(query, city){
+  const cfg=window.DOCGEN_CONFIG||{};
+  const key=cfg.SERPER_API_KEY||'';
+  if(!key) return {ok:false, reason:'no_key'};
+  const q=[query, city, 'Vietnam'].filter(Boolean).join(' ').replace(/\s+/g,' ').trim();
+  try{
+    const r=await fetch('https://google.serper.dev/places',{
+      method:'POST',
+      headers:{'X-API-KEY':key,'Content-Type':'application/json'},
+      body:JSON.stringify({q, gl:'vn', hl:'en'})
+    });
+    if(r.status===402||r.status===403||r.status===429) return {ok:false, reason:'quota', status:r.status};
+    if(!r.ok) return {ok:false, reason:'http', status:r.status};
+    const data=await r.json();
+    const places=data.places||[];
+    if(!places.length) return {ok:false, reason:'empty'};
+    // pick best fuzzy match
+    let best=places[0], score=0;
+    const nq=norm(query);
+    for(const p of places){
+      const nt=norm(p.title||'');
+      let s=0;
+      if(nt===nq) s=100;
+      else if(nt.includes(nq)||nq.includes(nt)) s=80;
+      else {
+        const at=new Set(nq.split(' ').filter(t=>t.length>2));
+        s=[...at].filter(t=>nt.includes(t)).length*20;
+      }
+      if(s>score){score=s; best=p;}
+    }
+    const hotel={
+      id:'serper-'+Date.now(),
+      aliases:[query, best.title].filter(Boolean),
+      name:String(best.title||query).trim(),
+      address:String(best.address||'').trim(),
+      phone:String(best.phoneNumber||best.phone||'').trim(),
+      website:String(best.website||'').trim(),
+      source:'serper'
+    };
+    if(!hotel.address && !hotel.phone) return {ok:false, reason:'empty'};
+    return {ok:true, hotel};
+  }catch(e){
+    console.warn('Serper lookup failed', e);
+    // network/CORS -> treat as fail, may fall back
+    return {ok:false, reason:'network', error:String(e)};
+  }
+}
+
 async function geminiHotelLookup(query){
   const cfg=window.DOCGEN_CONFIG||{};
   const key=cfg.GEMINI_API_KEY || (localStorage.prov==='gemini'?localStorage.key:'') || '';
@@ -425,22 +487,52 @@ async function geminiHotelLookup(query){
     try{ return await call(false); } catch(e2){ console.warn('Gemini lookup failed', e2); return null; } }
 }
 
+async function resolveHotelContact(query, city){
+  // 1) bundled/extra hotels already matched upstream; 2) localStorage cache
+  const cached=cacheLookup(query) || (city?cacheLookup(city+' '+query):null);
+  if(cached && (cached.address||cached.phone)) return {...cached, from_cache:true};
+
+  // 3) Serper (1 call)
+  const s=await serperHotelLookup(query, city);
+  if(s.ok){
+    hotelCacheSet(query, s.hotel);
+    if(s.hotel.name) hotelCacheSet(s.hotel.name, s.hotel);
+    return s.hotel;
+  }
+  // 4) Gemini only if Serper quota/credits or empty/network
+  if(s.reason==='quota' || s.reason==='empty' || s.reason==='network' || s.reason==='http' || s.reason==='no_key'){
+    const g=await geminiHotelLookup([query, city, 'Vietnam'].filter(Boolean).join(' '));
+    if(g && (g.address||g.phone)){
+      hotelCacheSet(query, g);
+      return g;
+    }
+  }
+  return null;
+}
+
 async function enrichMissingHotels(data, hotels){
   for(const r of data.acc_rows){
     if(!r.is_hotel || r.is_train || !r.missing) continue;
     const q=r.hotel_name||r.city;
-    const found=await geminiHotelLookup(q);
+    const found=await resolveHotelContact(q, r.city);
     if(found && (found.address||found.phone)){
+      // also persist to hotelDir extras for matching next time
       saveHotelExtra(found);
       hotels.push(found);
       r.hotel_block=hotelBlock(found);
       r.address=found.address; r.phone=found.phone; r.website=found.website;
-      r.matched_name=found.name; r.missing=false; r.auto_lookup=true;
-      data.flags.push({level:'info', msg:`tra cứu tự động – vui lòng kiểm tra: ${found.name}`});
+      r.matched_name=found.name; r.missing=false;
+      r.source=found.source||'unknown';
+      r.auto_lookup=true;
+      if(found.source==='serper'){
+        data.flags.push({level:'info', msg:'Từ tìm kiếm Google (Serper): '+found.name+(found.from_cache?' (cache)':'')});
+      } else if(String(found.source||'').startsWith('gemini')){
+        data.flags.push({level:'ai', msg:'⚠ Địa chỉ do AI tạo, có thể không chính xác – vui lòng kiểm tra trước khi tải: '+found.name});
+      }
     }
   }
   return data;
 }
 
-global.Voucher={parseSummary,loadHotels,saveHotelExtra,matchHotel,hotelBlock,todayVN,norm,renderVoucherDoc,mergeHotels,geminiHotelLookup,enrichMissingHotels};
+global.Voucher={parseSummary,loadHotels,saveHotelExtra,matchHotel,hotelBlock,todayVN,norm,renderVoucherDoc,mergeHotels,geminiHotelLookup,serperHotelLookup,resolveHotelContact,enrichMissingHotels,hotelCacheGet};
 })(window);

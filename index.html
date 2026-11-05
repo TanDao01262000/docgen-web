@@ -151,7 +151,14 @@ async function vExtract(){
   const need=VDATA.acc_rows.filter(r=>r.is_hotel&&r.missing);
   if(need.length){ vinfo.textContent=(LANG==='vi'?'Đang tra cứu khách sạn còn thiếu...':'Looking up missing hotels...'); await Voucher.enrichMissingHotels(VDATA, VHOTELS); }
   vinfo.textContent=(LANG==='vi'?`Đã đọc: ${VDATA.acc_rows.length} dòng KS/tàu, ${VDATA.trf_rows.length} transfer/tour.`:`Parsed: ${VDATA.acc_rows.length} hotel/train rows, ${VDATA.trf_rows.length} transfers.`);
-  vflags.innerHTML=VDATA.flags.map(x=>`<div style="background:#fef3c7;padding:6px;margin:4px 0;border-radius:6px">⚠ ${x.msg}</div>`).join('');
+  vflags.innerHTML=VDATA.flags.map(x=>{
+    const ai=x.level==='ai'||/AI tạo|không chính xác/i.test(x.msg);
+    const bg=ai?'#fee2e2':'#fef3c7'; const border=ai?'border:1px solid #ef4444':'';
+    return `<div style="background:${bg};padding:8px;margin:4px 0;border-radius:6px;${border}">${x.msg}</div>`;
+  }).join('');
+  if(VDATA.acc_rows.some(r=>String(r.source||'').startsWith('gemini'))){
+    vflags.innerHTML = `<div style="background:#ffedd5;border:2px solid #f97316;padding:10px;margin:6px 0;border-radius:8px;font-weight:600">⚠ Có địa chỉ do AI tạo trong voucher — vui lòng kiểm tra kỹ trước khi tải file.</div>` + vflags.innerHTML;
+  }
   v_update.value=VDATA.update_date; v_pax.value=VDATA.pax; v_contact.value=VDATA.contact; v_guests.value=VDATA.guests.join('\n');
   drawVacc(); drawVtrf();
 }
@@ -166,7 +173,7 @@ function drawVacc(){
         <td><input value="${(r.check_in||'').replace(/"/g,'&quot;')}" oninput="VDATA.acc_rows[${i}].check_in=this.value"></td>
         <td><textarea rows="2" oninput="VDATA.acc_rows[${i}].check_out=this.value">${r.check_out||''}</textarea></td>
         <td><textarea rows="3" oninput="VDATA.acc_rows[${i}].hotel_block=this.value;VDATA.acc_rows[${i}].missing=false">${r.hotel_block||''}</textarea>
-          ${r.auto_lookup?`<div class="muted">tra cứu tự động – vui lòng kiểm tra</div>`:''}${r.missing?`<button class="sec" onclick="vSaveHotel(${i})">Lưu KS này</button>`:''}</td>
+          ${r.source==='serper'?`<div class="muted">Từ tìm kiếm Google (Serper)</div>`:String(r.source||'').startsWith('gemini')?`<div style="color:#b91c1c;font-weight:600">⚠ Địa chỉ do AI tạo, có thể không chính xác – vui lòng kiểm tra trước khi tải</div>`:r.auto_lookup?`<div class="muted">tra cứu tự động – vui lòng kiểm tra</div>`:''}${r.missing?`<button class="sec" onclick="vSaveHotel(${i})">Lưu KS này</button>`:''}</td>
         <td><textarea rows="3" oninput="VDATA.acc_rows[${i}].note=this.value">${r.note||''}</textarea></td></tr>`;
     }).join('')+'</table>';
 }
