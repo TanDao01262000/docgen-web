@@ -24,6 +24,17 @@ function fmtFlight(a){
   return String(a||'').trim().replace(/\s+/g,' ');
 }
 
+
+function looksLikeProseAddress(addr){
+  const s=String(addr||'').trim();
+  if(!s) return true;
+  if(s.length>120) return true;
+  if(/can be contacted|is located|please contact|the resort is|hotel is|\b(our|we|you)\b/i.test(s)) return true;
+  if(/https?:\/\//i.test(s)) return true;
+  // Prefer addresses with a digit or clear place token
+  if(!/\d/.test(s) && !/(street|st\b|road|rd\b|ave|district|ward|ap\b|hamlet|island|phu quoc|sai gon|hanoi|danang|da nang)/i.test(s)) return true;
+  return false;
+}
 function shortenAddress(addr){
   let a=String(addr||'').replace(/\s+/g,' ').trim();
   if(!a) return '';
@@ -252,33 +263,110 @@ function resolvePlace(label, hotels, hotelByCity){
   return matchHotel(hotels, label);
 }
 
+
+function headerIndexMap(row){
+  const map={};
+  (row||[]).forEach((v,i)=>{
+    const k=norm(v).replace(/\s+/g,' ');
+    if(!k) return;
+    if(/^(NO|STT|NR|ROW|#)$/.test(k)) map.no=i;
+    else if(/^(NAME|FIRST|FIRST NAME|GIVEN NAME|JMENO|JMENO)$/.test(k)) map.first=i;
+    else if(/^(SURNAME|LAST|LAST NAME|FAMILY|PRIJMENI|PRIJMENI)$/.test(k)) map.surname=i;
+    else if(/^(SEX|GENDER|TITLE|POHLAVI|POHLAVI)$/.test(k)) map.sex=i;
+  });
+  return map;
+}
+function looksLikeRowNo(v){
+  return /^\d{1,3}(?:\.0+)?$/.test(String(v||'').trim());
+}
+function titleFromSex(sex){
+  const sx=String(sex||'').trim().toUpperCase().replace(/\./g,'');
+  if(sx==='F'||sx==='W'||sx==='MS'||sx==='MISS'||sx==='FEMALE') return 'MS';
+  if(sx==='MRS') return 'MRS';
+  if(sx==='M'||sx==='MR'||sx==='MALE') return 'MR';
+  return 'MR';
+}
+function formatGuestLine(n,g){
+  const title=g.title||titleFromSex(g.sex);
+  const sur=String(g.surname||'').trim().toUpperCase();
+  const first=String(g.first||'').trim().toUpperCase();
+  // Drop accidental numeric tokens (row no leaked into a name field)
+  const clean=s=>s.split(/\s+/).filter(tok=>!looksLikeRowNo(tok) && !/^\d+$/.test(tok)).join(' ');
+  const name=[clean(sur),clean(first)].filter(Boolean).join(' ');
+  return `${n}. ${title} ${name}`.replace(/\s+/g,' ').trim();
+}
+function parseGuestsFromGt(blob){
+  const out=[];
+  const re=/(\d+)\s*\.\s*([A-Za-zÁ-žA-Za-z]+)\s*\/\s*([A-Za-zÁ-žA-Za-z]+)(?:\s+(MR|MS|MRS)\.?\b)?/gi;
+  let m; const s=String(blob||'');
+  while((m=re.exec(s))){
+    const title=(m[4]||'').toUpperCase();
+    out.push({first:m[3], surname:m[2], sex:title||'', title});
+  }
+  return out;
+}
+function parseGuestsFromClients(clients){
+  const out=[];
+  if(!clients||!clients.length) return out;
+  let start=0;
+  let cols=headerIndexMap(clients[0]);
+  const hasHeader=cols.first!=null||cols.surname!=null||cols.sex!=null||cols.no!=null;
+  if(hasHeader){
+    start=1;
+    if(cols.first==null && cols.no!=null) cols.first=cols.no+1;
+    if(cols.surname==null && cols.first!=null) cols.surname=cols.first+1;
+    if(cols.sex==null && cols.surname!=null) cols.sex=cols.surname+1;
+  } else if(looksLikeRowNo(cell(clients[0],0)) && cell(clients[0],1) && cell(clients[0],2)){
+    cols={no:0, first:1, surname:2, sex:3};
+  } else {
+    cols={first:0, surname:1, sex:2};
+  }
+  if(cols.first==null) cols.first=0;
+  if(cols.surname==null) cols.surname=1;
+  if(cols.sex==null) cols.sex=2;
+
+  for(let i=start;i<clients.length;i++){
+    const row=clients[i];
+    let first=cell(row, cols.first);
+    let surname=cell(row, cols.surname);
+    let sex=cell(row, cols.sex);
+    // Safety: NO column still mapped into first
+    if(looksLikeRowNo(first) && cell(row, cols.first+1)){
+      first=cell(row, cols.first+1);
+      surname=cell(row, cols.first+2);
+      sex=cell(row, cols.first+3);
+    }
+    if(!first && !surname) break;
+    if(/platby|payment|^mail$|^notes?$/i.test(first)) break;
+    if(/^(name|surname|sex|no|stt)$/i.test(first)) continue;
+    let title='';
+    const sxU=String(sex||'').trim().toUpperCase().replace(/\./g,'');
+    if(/^(MR|MS|MRS)$/.test(sxU)) title=sxU;
+    out.push({first:first.trim(), surname:surname.trim(), sex, title});
+  }
+  return out;
+}
+
 function parseSummary(wb, hotels){
   const flags=[];
   const sum=sheetMatrix(wb,'Summary');
   const clients=sheetMatrix(wb,'Clients + Rooming list');
-  // guests from clients
-  const guests=[];
-  for(let i=1;i<clients.length;i++){
-    const name=cell(clients[i],0), sur=cell(clients[i],1);
-    if(!name&&!sur) break;
-    if(/platby/i.test(name)) break;
-    guests.push({first:name.trim(), surname:sur.trim(), sex:cell(clients[i],2)});
-  }
+  // guests from Clients sheet (layouts vary: Name|Surname|Sex OR No|Name|Surname|Sex|...)
+  const guests=parseGuestsFromClients(clients);
+  const gtBlob=[0,1,2].flatMap(r=>[cell(sum[r],0),cell(sum[r],1)]).filter(Boolean).join(' ');
   if(!guests.length){
-    // fallback GT line
-    const gt=cell(sum[0],1);
-    const parts=[...gt.matchAll(/(\d+)\.([A-Z]+)\/([A-Z]+)\s+(MR|MS|MRS)?/gi)];
-    for(const p of parts) guests.push({first:p[3], surname:p[2], sex:p[4]||''});
+    for(const g of parseGuestsFromGt(gtBlob)) guests.push(g);
+  } else if(gtBlob){
+    // Prefer MR/MS/MRS from GT when surname matches (Clients often only has M/F)
+    const gt=parseGuestsFromGt(gtBlob);
+    for(const g of guests){
+      const hit=gt.find(x=>(norm(x.surname)===norm(g.surname)) || (norm(x.first)===norm(g.first)));
+      if(hit && hit.title) g.title=hit.title;
+    }
   }
   const surname=guests[0]?.surname||'';
-  const guest_lines=guests.map((g,i)=>`${i+1}. ${(g.sex||'MR').toUpperCase().replace(/M$/,'MR')} ${norm(g.surname)} ${norm(g.first)}`.replace(/\s+/g,' ')).map(s=>s.replace(/ MR /,' MR ').replace(/^(\d+\.)\s*M\s/,'$1 MR '));
-  // nicer guest lines: "1. MR LEKES VIKTOR"
-  const gl=guests.map((g,i)=>{
-    let title='MR';
-    const sx=(g.sex||'').toUpperCase();
-    if(sx==='F'||sx==='MS'||sx==='MRS') title='MS';
-    return `${i+1}. ${title} ${String(g.surname).trim().toUpperCase()} ${String(g.first).trim().toUpperCase()}`;
-  });
+  // voucher line: "1. MR SURNAME FIRST" (full name, no stray index)
+  const gl=guests.map((g,i)=>formatGuestLine(i+1,g));
 
   // header fields
   let contact='';
@@ -811,30 +899,47 @@ async function tavilyHotelLookup(query, city){
   }
 }
 
+function sanitizeHotelCandidate(h){
+  if(!h) return null;
+  const addr=String(h.address||'').trim();
+  if(looksLikeProseAddress(addr)){
+    return {...h, address:'', _bad_address:true};
+  }
+  return {...h, address:shortenAddress(addr)};
+}
 async function resolveHotelContact(query, city){
   // 1) local cache
   const cached=cacheLookup(query) || (city?cacheLookup(city+' '+query):null);
-  if(cached && (cached.address||cached.phone)) return {...cached, from_cache:true};
+  if(cached && (cached.address||cached.phone)){
+    const h=sanitizeHotelCandidate({...cached, from_cache:true});
+    if(h && (h.address||h.phone)) return h;
+  }
 
   // 2) Serper (1 call)
   const s=await serperHotelLookup(query, city);
   if(s.ok){
-    hotelCacheSet(query, s.hotel);
-    if(s.hotel.name) hotelCacheSet(s.hotel.name, s.hotel);
-    return s.hotel;
+    const h=sanitizeHotelCandidate(s.hotel);
+    if(h && (h.address||h.phone)){
+      hotelCacheSet(query, h);
+      if(h.name) hotelCacheSet(h.name, h);
+      return h;
+    }
   }
   // 3) Tavily if Serper failed
-  const t=await tavilyHotelLookup(query, city);
-  if(t.ok){
-    hotelCacheSet(query, t.hotel);
-    if(t.hotel.name) hotelCacheSet(t.hotel.name, t.hotel);
-    return t.hotel;
+  const tv=await tavilyHotelLookup(query, city);
+  if(tv.ok){
+    const h=sanitizeHotelCandidate(tv.hotel);
+    if(h && (h.address||h.phone)){
+      hotelCacheSet(query, h);
+      if(h.name) hotelCacheSet(h.name, h);
+      return h;
+    }
   }
   // 4) Gemini last resort — only when search APIs failed (quota/network/auth),
   // not when they returned unrelated/empty hits for a garbage name.
-  const searchMiss = (s.reason==='low_score'||s.reason==='empty') && (t.reason==='low_score'||t.reason==='empty'||t.reason==='no_key');
+  const searchMiss = (s.reason==='low_score'||s.reason==='empty') && (tv.reason==='low_score'||tv.reason==='empty'||tv.reason==='no_key');
   if(searchMiss) return null;
-  const g=await geminiHotelLookup([query, city, 'Vietnam'].filter(Boolean).join(' '));
+  const g=sanitizeHotelCandidate(await geminiHotelLookup([query, city, 'Vietnam'].filter(Boolean).join(' ')));
   if(g && (g.address||g.phone)){
     hotelCacheSet(query, g);
     return g;
@@ -985,5 +1090,5 @@ function parseSummaryFromPdfText(text, hotels){
   return parseSummary(wb, hotels);
 }
 
-global.Voucher={parseSummary,parseSummaryFromPdfText,loadHotels,saveHotelExtra,matchHotel,hotelBlock,todayVN,norm,renderVoucherDoc,mergeHotels,geminiHotelLookup,serperHotelLookup,tavilyHotelLookup,resolveHotelContact,enrichMissingHotels,hotelCacheGet,shortenAddress,canonicalCity,parseMeals,aptCode,dateKey};
+global.Voucher={parseSummary,parseSummaryFromPdfText,loadHotels,saveHotelExtra,matchHotel,hotelBlock,todayVN,norm,renderVoucherDoc,mergeHotels,geminiHotelLookup,serperHotelLookup,tavilyHotelLookup,resolveHotelContact,enrichMissingHotels,hotelCacheGet,shortenAddress,canonicalCity,parseMeals,aptCode,dateKey,parseGuestsFromClients,parseGuestsFromGt,formatGuestLine};
 })(window);
