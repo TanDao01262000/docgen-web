@@ -1,0 +1,9 @@
+_test_*
+*.xlsx
+samples/
+vouchers.zip
+VOUCHER-*.docx
+/tmp
+docgen-real
+config.local.js
+index.html.bak

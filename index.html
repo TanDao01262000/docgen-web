@@ -2,6 +2,9 @@
 <title>DocGen</title>
 <script src="vendor/pdf.min.js"></script><script src="vendor/tesseract.min.js"></script><script src="vendor/xlsx.full.min.js"></script>
 <script src="vendor/pizzip.min.js"></script><script src="vendor/docxtemplater.js"></script><script src="vendor/jszip.min.js"></script>
+<script src="config.js"></script>
+<script src="config.local.js" onerror="void 0"></script>
+<script src="voucher.js"></script>
 <style>
 body{font-family:system-ui,sans-serif;max-width:980px;margin:24px auto;padding:0 16px;background:#f6f7fb;color:#222}
 .card{background:#fff;border-radius:12px;padding:18px 22px;margin:14px 0;box-shadow:0 1px 4px #0001}
@@ -11,6 +14,11 @@ td input{width:100%;border:0;padding:4px;box-sizing:border-box}.muted{color:#666
 pre{white-space:pre-wrap;max-height:200px;overflow:auto;background:#f3f4f6;padding:8px;font-size:12px}input[type=password],select{padding:6px}
 </style></head><body>
 <div style="float:right"><button class="sec" id="langbtn" onclick="setLang(LANG=='vi'?'en':'vi')"></button></div><h1>📄 DocGen</h1><div class="muted" data-i="sub"></div>
+<div class="card" style="padding:10px 22px">
+<label class="t"><input type="radio" name="mode" value="generic" onchange="setMode(this.value)"> <span data-i="mode_g">Chế độ chung</span></label>
+<label class="t"><input type="radio" name="mode" value="voucher" checked onchange="setMode(this.value)"> <span data-i="mode_v">Chế độ Voucher (file tổng hợp → 2 voucher)</span></label>
+</div>
+<div id="modeGeneric" style="display:none">
 <div class="card"><h2 data-i="s1"></h2><div id="tpls"></div>
 <p class="muted"><span data-i="addtpl"></span> <input type="file" id="tplfile" accept=".docx"></p></div>
 <div class="card"><h2 data-i="s2"></h2><input type="file" id="data" accept=".xlsx,.xls,.csv,.pdf"> <button id="exbtn" onclick="extract()" data-i="extract"></button>
@@ -18,6 +26,25 @@ pre{white-space:pre-wrap;max-height:200px;overflow:auto;background:#f3f4f6;paddi
 <div class="card"><h2 data-i="s3"></h2><div class="muted" data-i="s3d"></div><div id="grid"></div>
 <p><button class="sec" onclick="addRow()" data-i="addrow"></button> <button id="genbtn" onclick="gen()" data-i="gen"></button></p>
 <details><summary class="muted" data-i="txt"></summary><pre id="txt"></pre></details></div>
+</div>
+<div id="modeVoucher">
+<div class="card"><h2 data-i="v1">1. Tải file tổng hợp (.xlsx)</h2>
+<input type="file" id="vfile" accept=".xlsx,.xls"> <button id="vexbtn" onclick="vExtract()" data-i="vextract">Đọc &amp; xem trước</button>
+<div id="vinfo" class="muted"></div>
+<div id="vflags"></div></div>
+<div class="card"><h2 data-i="v2">2. Kiểm tra &amp; chỉnh sửa</h2>
+<div class="muted" data-i="v2d">Các ô thiếu thông tin được tô vàng. Bạn có thể sửa trước khi tạo file.</div>
+<label>UpDate <input id="v_update" size="12"></label>
+<label style="margin-left:12px">Số khách <input id="v_pax" size="4"></label>
+<label style="margin-left:12px">Liên hệ HDV <input id="v_contact" size="40"></label>
+<p><b data-i="vguests">Danh sách khách (mỗi dòng một người)</b><br><textarea id="v_guests" rows="3" style="width:100%"></textarea></p>
+<h3 data-i="vacc">Khách sạn / tàu</h3><div id="vacc"></div>
+<h3 data-i="vtrf">Transfers / tours</h3><div id="vtrf"></div>
+<p><button id="vgenbtn" onclick="vGen()" data-i="vgen">Tạo 2 voucher &amp; tải về</button>
+<button class="sec" onclick="vExportHotels()" data-i="vexphotels">Xuất danh sách KS</button>
+<button class="sec" onclick="document.getElementById('vimp').click()" data-i="vimphotels">Nhập danh sách KS</button>
+<input type="file" id="vimp" accept=".json" style="display:none" onchange="vImportHotels(event)"></p>
+</div></div>
 <details class="card"><summary><b data-i="set"></b></summary>
 <p class="muted" data-i="setd"></p>
 <select id="prov"><option value="" data-i="off"></option><option value="groq">Groq</option><option value="gemini">Gemini</option></select>
@@ -40,6 +67,20 @@ off:'Off (rule-based)',ocrv:'OCR Vietnamese + English',save:'Save',ex:'example',
 ocr:'OCR page %i/%n (first run downloads language data)...',aifail:'AI failed: ',pick:'Please pick a file.',extracting:'Extracting...',
 badfile:'Upload .xlsx, .xls, .csv or .pdf',err:'Error: ',done:'%r record(s). Method: %m. OCR pages: %o.',rules:'rules',
 nothing:'Nothing to generate.',saved:'Saved in this browser.',zip:'documents.zip',lang:'Tiếng Việt'}};
+
+I.vi.mode_g='Chế độ chung';I.en.mode_g='Generic mode';
+I.vi.mode_v='Chế độ Voucher (file tổng hợp → 2 voucher)';I.en.mode_v='Voucher mode (summary → 2 vouchers)';
+I.vi.v1='1. Tải file tổng hợp (.xlsx)';I.en.v1='1. Upload summary (.xlsx)';
+I.vi.vextract='Đọc & xem trước';I.en.vextract='Parse & preview';
+I.vi.v2='2. Kiểm tra & chỉnh sửa';I.en.v2='2. Review & edit';
+I.vi.v2d='Ô thiếu thông tin được tô vàng. Sửa trước khi tạo file.';I.en.v2d='Missing fields are highlighted. Edit before generating.';
+I.vi.vguests='Danh sách khách (mỗi dòng một người)';I.en.vguests='Guest list (one per line)';
+I.vi.vacc='Khách sạn / tàu';I.en.vacc='Hotels / train';
+I.vi.vtrf='Transfers / tours';I.en.vtrf='Transfers / tours';
+I.vi.vgen='Tạo 2 voucher & tải về';I.en.vgen='Generate 2 vouchers & download';
+I.vi.vexphotels='Xuất danh sách KS';I.en.vexphotels='Export hotel list';
+I.vi.vimphotels='Nhập danh sách KS';I.en.vimphotels='Import hotel list';
+
 let LANG=localStorage.lang||'vi';const t=k=>I[LANG][k];
 function setLang(l){LANG=l;localStorage.lang=l;document.documentElement.lang=l;document.querySelectorAll('[data-i]').forEach(e=>e.textContent=t(e.dataset.i));langbtn.textContent=t('lang');if(window.T&&Object.keys(T).length)loadT()}
 pdfjsLib.GlobalWorkerOptions.workerSrc='vendor/pdf.worker.min.js';
@@ -97,5 +138,81 @@ async function gen(){const files=[];
  const z=new JSZip();files.forEach(([n,b])=>z.file(n,b));dl(await z.generateAsync({type:'blob'}),t('zip'))}
 function saveSet(){localStorage.prov=prov.value;localStorage.key=key.value;alert(t('saved'))}
 prov.value=localStorage.prov||'';key.value=localStorage.key||'';
+
+let VDATA=null, VHOTELS=[];
+function setMode(m){modeGeneric.style.display=m==='generic'?'block':'none';modeVoucher.style.display=m==='voucher'?'block':'none'}
+async function vExtract(){
+  const f=vfile.files[0]; if(!f) return alert(t('pick'));
+  vinfo.textContent=t('extracting');
+  VHOTELS=await Voucher.loadHotels();
+  const buf=await f.arrayBuffer();
+  const wb=XLSX.read(buf);
+  VDATA=Voucher.parseSummary(wb, VHOTELS);
+  const need=VDATA.acc_rows.filter(r=>r.is_hotel&&r.missing);
+  if(need.length){ vinfo.textContent=(LANG==='vi'?'Đang tra cứu khách sạn còn thiếu...':'Looking up missing hotels...'); await Voucher.enrichMissingHotels(VDATA, VHOTELS); }
+  vinfo.textContent=(LANG==='vi'?`Đã đọc: ${VDATA.acc_rows.length} dòng KS/tàu, ${VDATA.trf_rows.length} transfer/tour.`:`Parsed: ${VDATA.acc_rows.length} hotel/train rows, ${VDATA.trf_rows.length} transfers.`);
+  vflags.innerHTML=VDATA.flags.map(x=>`<div style="background:#fef3c7;padding:6px;margin:4px 0;border-radius:6px">⚠ ${x.msg}</div>`).join('');
+  v_update.value=VDATA.update_date; v_pax.value=VDATA.pax; v_contact.value=VDATA.contact; v_guests.value=VDATA.guests.join('\n');
+  drawVacc(); drawVtrf();
+}
+function drawVacc(){
+  const rows=VDATA.acc_rows;
+  vacc.innerHTML='<table><tr><th>STT</th><th>Loại</th><th>City / Train</th><th>Check-in</th><th>Check-out</th><th>Hotel block</th><th>Note</th></tr>'+
+    rows.map((r,i)=>{
+      const bg=r.missing?'background:#fef08a':'';
+      if(r.is_train) return `<tr style="${bg}"><td>${i+1}</td><td>train</td><td colspan="5"><textarea rows="2" style="width:100%" oninput="VDATA.acc_rows[${i}].train_text=this.value">${(r.train_text||'').replace(/</g,'&lt;')}</textarea></td></tr>`;
+      return `<tr style="${bg}"><td>${i+1}</td><td>hotel</td>
+        <td><input value="${r.city||''}" oninput="VDATA.acc_rows[${i}].city=this.value"></td>
+        <td><input value="${(r.check_in||'').replace(/"/g,'&quot;')}" oninput="VDATA.acc_rows[${i}].check_in=this.value"></td>
+        <td><textarea rows="2" oninput="VDATA.acc_rows[${i}].check_out=this.value">${r.check_out||''}</textarea></td>
+        <td><textarea rows="3" oninput="VDATA.acc_rows[${i}].hotel_block=this.value;VDATA.acc_rows[${i}].missing=false">${r.hotel_block||''}</textarea>
+          ${r.auto_lookup?`<div class="muted">tra cứu tự động – vui lòng kiểm tra</div>`:''}${r.missing?`<button class="sec" onclick="vSaveHotel(${i})">Lưu KS này</button>`:''}</td>
+        <td><textarea rows="3" oninput="VDATA.acc_rows[${i}].note=this.value">${r.note||''}</textarea></td></tr>`;
+    }).join('')+'</table>';
+}
+function drawVtrf(){
+  const rows=VDATA.trf_rows;
+  vtrf.innerHTML='<table><tr><th>STT</th><th>Label</th><th>Date</th><th>From</th><th>To</th><th>Note</th></tr>'+
+    rows.map((r,i)=>`<tr style="${r.missing?'background:#fef08a':''}"><td>${i+1}</td>
+      <td><textarea rows="2" oninput="VDATA.trf_rows[${i}].label=this.value">${r.label||''}</textarea></td>
+      <td><input value="${r.date||''}" oninput="VDATA.trf_rows[${i}].date=this.value"></td>
+      <td><textarea rows="3" oninput="VDATA.trf_rows[${i}].where_from=this.value">${r.where_from||''}</textarea></td>
+      <td><textarea rows="3" oninput="VDATA.trf_rows[${i}].where_to=this.value">${r.where_to||''}</textarea></td>
+      <td><textarea rows="4" oninput="VDATA.trf_rows[${i}].note=this.value">${r.note||''}</textarea></td></tr>`).join('')+'</table>';
+}
+function vSaveHotel(i){
+  const r=VDATA.acc_rows[i];
+  const lines=(r.hotel_block||'').split('\n').map(s=>s.trim()).filter(Boolean);
+  const h={id:'custom-'+Date.now(), aliases:[r.hotel_name||lines[0], r.city], name:lines[0]||r.hotel_name,
+    address:lines.filter(l=>!/^tel|^web|^telefon/i.test(l)).slice(1).join(', '),
+    phone:(lines.find(l=>/^tel|^telefon/i.test(l))||'').replace(/^Tel(efon)?\s*:\s*/i,''),
+    website:(lines.find(l=>/^web/i.test(l))||'').replace(/^Web\s*:\s*/i,'')};
+  Voucher.saveHotelExtra(h); r.missing=false; alert(t('saved')); drawVacc();
+}
+function vExportHotels(){
+  const extra=localStorage.hotelDir||'[]';
+  const blob=new Blob([extra],{type:'application/json'});
+  const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='hotels-extra.json'; a.click();
+}
+async function vImportHotels(ev){
+  const f=ev.target.files[0]; if(!f) return;
+  const arr=JSON.parse(await f.text());
+  localStorage.hotelDir=JSON.stringify(arr); alert(t('saved'));
+}
+async function vGen(){
+  if(!VDATA) return alert(t('pick'));
+  VDATA.update_date=v_update.value; VDATA.pax=v_pax.value; VDATA.contact=v_contact.value;
+  VDATA.guests=v_guests.value.split('\n').map(s=>s.trim()).filter(Boolean);
+  VDATA.guest_lines=VDATA.guests.join('\n');
+  // ensure boolean flags for docxtemplater
+  VDATA.acc_rows=VDATA.acc_rows.map(r=>({...r, is_hotel:!!r.is_hotel, is_train:!!r.is_train}));
+  const a=await Voucher.renderVoucherDoc('voucher_accommodation.docx', VDATA);
+  const b=await Voucher.renderVoucherDoc('voucher_transfers.docx', VDATA);
+  const z=new JSZip(); z.file('VOUCHER-ACCOMMODATION.docx',a); z.file('VOUCHER-TRANSFERS.docx',b);
+  const blob=await z.generateAsync({type:'blob'});
+  const link=document.createElement('a'); link.href=URL.createObjectURL(blob); link.download='vouchers.zip'; link.click();
+}
+setMode('voucher');
+
 setLang(LANG);loadT();
 </script></body></html>

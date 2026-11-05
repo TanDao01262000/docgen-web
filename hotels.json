@@ -1,0 +1,82 @@
+[
+  {
+    "id": "oriental-suites",
+    "aliases": [
+      "ORIENTAL SUITE",
+      "ORIENTAL SUITES",
+      "ORIENTAL SUITES HOTEL & SPA",
+      "ORIENTAL SUITES HOTEL"
+    ],
+    "name": "ORIENTAL SUITES HOTEL & SPA",
+    "address": "58 Hang Dao, Hoan Kiem, Hanoi",
+    "phone": "024. 3557.3333",
+    "website": ""
+  },
+  {
+    "id": "aspira-cruise",
+    "aliases": [
+      "ASPIRA CRUISE",
+      "ASPIRA"
+    ],
+    "name": "ASPIRA CRUISE",
+    "address": "36 Tuan Chau, Ha Long city, Quang Ninh",
+    "phone": "0944 319 866",
+    "website": ""
+  },
+  {
+    "id": "tam-coc-wonderland",
+    "aliases": [
+      "TAM COC WONDERLAND",
+      "TAM COC"
+    ],
+    "name": "TAM COC WONDERLAND",
+    "address": "Khu Hang Ðùng, Ninh Hai, Hoa Lu District, Ninh Binh, Vietnam",
+    "phone": "0986 717 4168 735 888",
+    "website": ""
+  },
+  {
+    "id": "cherish-hue",
+    "aliases": [
+      "CHERISH HUE",
+      "CHERISH HUE HOTEL"
+    ],
+    "name": "CHERISH HUE HOTEL",
+    "address": "57 - 59 Ben Nghe - TP.Hue -VietNam",
+    "phone": "(84-234) 3943943",
+    "website": ""
+  },
+  {
+    "id": "hoi-an-beach-resort",
+    "aliases": [
+      "HOI AN BEACH RESORT",
+      "HOI AN BEACH"
+    ],
+    "name": "HOI AN BEACH RESORT",
+    "address": "1 Cua Dai, Hoi An, Quang Nam",
+    "phone": "+84 235 3927 011",
+    "website": ""
+  },
+  {
+    "id": "the-odys",
+    "aliases": [
+      "THE ODYS",
+      "THE ODYS BOUTIQUE HOTEL",
+      "ODYS"
+    ],
+    "name": "THE ODYS BOUTIQUE HOTEL",
+    "address": "65-27-69 Nguyen Thai Binh St, District 1, HCMC",
+    "phone": "028 3821 6915",
+    "website": "https://theodyshotel.com/"
+  },
+  {
+    "id": "lotus-train",
+    "aliases": [
+      "LOTUS TRAIN",
+      "LOTUS"
+    ],
+    "name": "LOTUS TRAIN",
+    "address": "",
+    "phone": "",
+    "website": ""
+  }
+]
