@@ -19,6 +19,10 @@ function parseTimeFrom(s){
   const t=s.match(/(\d{1,2}:\d{2})/);
   return t?t[1]:'';
 }
+function fmtFlight(a){
+  // Keep summary spelling (e.g. "VN 036" vs "VN119"); only collapse whitespace
+  return String(a||'').trim().replace(/\s+/g,' ');
+}
 function sheetMatrix(wb, name){
   const ws=wb.Sheets[name]; if(!ws) return [];
   return XLSX.utils.sheet_to_json(ws,{header:1,defval:'',raw:false});
@@ -139,7 +143,7 @@ function parseSummary(wb, hotels){
   for(let i=0;i<sum.length;i++){
     const a=cell(sum[i],0), dep=cell(sum[i],2), arr=cell(sum[i],4);
     if(/^[A-Z]{2}\s*\d+|^DE\d+/i.test(a) && dep){
-      flights.push({carrier:a.replace(/\s+/g,''), from:cell(sum[i],1), dep, to:cell(sum[i],3), arr, pnr:cell(sum[i],5)});
+      flights.push({carrier:fmtFlight(a), from:cell(sum[i],1), dep, to:cell(sum[i],3), arr, pnr:cell(sum[i],5)});
     }
   }
 
@@ -167,14 +171,13 @@ function parseSummary(wb, hotels){
         trainNo=trainNo?`SE ${trainNo}`:'SE 19';
         const times=[...blob.matchAll(/(\d{1,2})[h:](\d{2})/g)].map(m=>`${m[1].padStart(2,'0')}h${m[2]}`);
         const depT=times[0]||'', arrT=times[1]||'';
-        if(!depT||!arrT) flags.push({level:'warn', msg:`Thiếu giờ tàu trên dòng ${city}/${hotel} — để trống, mặc định ${trainNo}`});
+        if(!depT||!arrT) flags.push({level:'warn', msg:`Thiếu giờ tàu (không có trong summary) — ${city}/${hotel}. Điền giờ ${trainNo} trên ô vàng trước khi tạo file.`});
         const cinP=parseDayMon(cin), coutP=parseDayMon(cout);
         let train_text=`${cinP.dayMon||cin} - ${coutP.dayMon||cout} ${hotel||'LOTUS TRAIN'} FROM NINH BINH TO HUE (private coupe)`;
-        // try detect route from places - keep sample style
         if(/lotus/i.test(hotel)||/night train/i.test(city))
-          train_text=`${cinP.dayMon||'16-JUN'} - ${coutP.dayMon||'17-JUN'} LOTUS TRAIN FROM NINH BINH TO HUE (private coupe)\n${trainNo}: ${depT||'??'} – ${arrT||'??'}`;
-        if(!depT||!arrT) train_text=train_text.replace('?? – ??','').replace(/: – /,'');
-        acc_rows.push({is_train:true, is_hotel:false, train_text, city:train_text, check_in:'', check_out:'', hotel_block:'', note:'', missing:!depT||!arrT, hotel, auto_lookup:false});
+          train_text=`${cinP.dayMon||cin} - ${coutP.dayMon||cout} LOTUS TRAIN FROM NINH BINH TO HUE (private coupe)\n${trainNo}: ${depT||'??'} – ${arrT||'??'}`;
+        // Keep ?? placeholders when times absent so the gap is visible & editable
+        acc_rows.push({is_train:true, is_hotel:false, train_text, city:train_text, check_in:'', check_out:'', hotel_block:'', note:'', missing:!depT||!arrT, gaps:(!depT||!arrT)?['train_text']:[], hotel, auto_lookup:false, train_no:trainNo, train_dep:depT, train_arr:arrT});
         continue;
       }
       const cinP=parseDayMon(cin), coutP=parseDayMon(cout);
@@ -339,12 +342,13 @@ function parseSummary(wb, hotels){
         const an=A?.name||kind;
         const notes=A?.notes||'';
         let meals='No meals';
-        if(/street food/i.test(notes)) meals='street food';
+        if(/Meal:\s*Street food/i.test(notes)) meals='Street food';
+        else if(/street food/i.test(notes) && !/Meal:/i.test(notes)) meals='street food';
+        else if(/street food/i.test(notes)) meals='Street food';
         else if(/1 breakfast.*2 lunches.*1 dinner/i.test(notes)) meals='1 breakfast, 2 lunches, 1 dinner';
         else if(/1\s*LUNCH/i.test(notes)) meals='1 lunch';
-        else if(/Meal:\s*Street food/i.test(notes)) meals='Street food';
-        else if(/no meals/i.test(notes)) meals='No meals';
-        const guideLang=/Czech|CSG/i.test(notes+kind+an)?'Czech speaking':/English|ESG/i.test(notes+an)?'English speaking':'';
+        else if(/Meal:\s*no\b|no meals/i.test(notes)) meals='No meals';
+        const guideLang=/Czech|CSG|\bCZ\b/i.test(notes+kind+an)?'Czech speaking':/English|ESG/i.test(notes+an)?'English speaking':'';
         let desc=an;
         // humanize
         if(/HA NOI.*FOOD/i.test(an+kind)) desc='1 Day Hanoi walking tour & Food tour after which you return to the hotel.';
@@ -363,8 +367,55 @@ function parseSummary(wb, hotels){
         }
         if(!fromH) missing=true;
       }
-      trf_rows.push({label, date, where_from, where_to, note, missing, raw_kind:kind, time});
+      // Append free-text notes from summary transport col (e.g. sim card, extra stops)
+      const sumNotes=String(notes||'').trim();
+      if(sumNotes){
+        // Skip internal ops notes that are not for the guest voucher
+        if(!/under\s*100\s*kg|tall\s*\(|:\s*done\b/i.test(sumNotes)){
+          const extra=sumNotes.replace(/\s*\(should be in the voucher\)\s*/i,'').trim();
+          if(extra){
+            if(/stops?/i.test(extra) && /marble|budha|buddha|dragon/i.test(extra)){
+              // Expand marble-mountain boilerplate with named stops from summary
+              const stopBits=[];
+              if(/marble/i.test(extra)) stopBits.push('Marble Mountains');
+              if(/budh|buddha/i.test(extra)) stopBits.push('Lady Buddha');
+              if(/dragon/i.test(extra)) stopBits.push('Dragon Bridge');
+              if(stopBits.length){
+                note=note.replace(/On the way you will stop at Marble Mountains for sightseeing, entrance fees included\.?/,
+                  'On the way you will stop at '+stopBits.join(', ')+' for sightseeing, entrance fees included.');
+                if(!/On the way you will stop/i.test(note)){
+                  note=note.replace(/\n?—?-*\n?On the way[\s\S]*/,'') + '\n—-----------------------------------\nOn the way you will stop at '+stopBits.join(', ')+' for sightseeing, entrance fees included.';
+                }
+              }
+            } else if(/sim\s*card/i.test(extra)){
+              if(!/sim\s*card/i.test(note)) note = note + '\n\nNote: ' + extra.replace(/^plus\s+/i,'');
+            } else if(!note.includes(extra)){
+              note = note + (note?'\n':'') + extra;
+            }
+          }
+        }
+      }
+      const gaps=[];
+      if(/TRAIN/i.test(where_to) && !/Departure:/i.test(where_to)){ gaps.push('where_to'); missing=true; }
+      if(/TRAIN/i.test(where_from) && !/Arrival:\s*\d/i.test(where_from)){ gaps.push('where_from'); missing=true; }
+      if(/Flight:\s*$/m.test(where_from) || (/Flight:/i.test(where_from) && !/Flight:\s*\S/i.test(where_from))){ gaps.push('where_from'); missing=true; }
+      if(/Flight:\s*$/m.test(where_to) || (/Flight:/i.test(where_to) && !/Flight:\s*\S/i.test(where_to))){ gaps.push('where_to'); missing=true; }
+      if(!time && /TIME:\s*$/m.test(where_from)){ gaps.push('where_from'); missing=true; }
+      if(!note) { gaps.push('note'); missing=true; }
+      trf_rows.push({label, date, where_from, where_to, note, missing, gaps, raw_kind:kind, time, summary_notes:sumNotes});
     }
+  }
+
+  // Extra flags for fields absent from summary
+  for(const r of trf_rows){
+    if(r.gaps && r.gaps.length){
+      if(r.gaps.includes('where_to') && /TRAIN/i.test(r.where_to))
+        flags.push({level:'warn', msg:`Thiếu giờ tàu ở "${(r.label||'').replace(/\n/g,' ')}" (Departure) — không có trong summary, điền ô vàng.`});
+    }
+  }
+  for(const r of acc_rows){
+    if(r.is_train && r.missing)
+      flags.push({level:'warn', msg:`Dòng tàu còn ?? — thay bằng giờ thật trước khi in.`});
   }
 
   return {
