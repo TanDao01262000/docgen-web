@@ -122,12 +122,15 @@ function airportDropoffNote(code, fl){
   if(!rule){
     return {note:`The driver will pick you up at the hotel reception and drop you off at the airport.`, unknown:true, kind:kind||'unknown'};
   }
-  const term=(dom===false)?'International terminal':(dom===true)?'Domestic terminal':((code==='DAD')?'Domestic terminal':'terminal');
-  if(code==='DAD')
-    return {note:`The driver will pick you up at the hotel reception and drop you off at the Domestic terminal of Da Nang airport.`, unknown:dom===null, kind:kind||'Domestic'};
+  // Prefer flight route; if unknown, leave editable (do not assume Domestic)
+  const term=(dom===false)?'International terminal':(dom===true)?'Domestic terminal':'terminal (domestic/international — confirm)';
   if(code==='SGN' && dom===false)
     return {note:`The driver will pick you up at the hotel reception and drop you off at the International terminal of Saigon airport.`, unknown:false, kind:'International'};
-  return {note:`The driver will pick you up at the hotel reception and drop you off at the ${term} of ${rule.name} airport.`, unknown:dom===null&&!kind, kind:kind||term};
+  if(code==='DAD' && dom===true)
+    return {note:`The driver will pick you up at the hotel reception and drop you off at the Domestic terminal of Da Nang airport.`, unknown:false, kind:'Domestic'};
+  if(code==='DAD' && dom===false)
+    return {note:`The driver will pick you up at the hotel reception and drop you off at the International terminal of Da Nang airport.`, unknown:false, kind:'International'};
+  return {note:`The driver will pick you up at the hotel reception and drop you off at the ${term} of ${rule.name} airport.`, unknown:dom===null, kind:kind||term};
 }
 function dateKey(s){
   const m=String(s||'').match(/(\d{1,2})\s*[.\-\s]*([A-Za-z]{3})/);
@@ -867,5 +870,120 @@ async function enrichMissingHotels(data, hotels){
   return data;
 }
 
-global.Voucher={parseSummary,loadHotels,saveHotelExtra,matchHotel,hotelBlock,todayVN,norm,renderVoucherDoc,mergeHotels,geminiHotelLookup,serperHotelLookup,tavilyHotelLookup,resolveHotelContact,enrichMissingHotels,hotelCacheGet,shortenAddress,canonicalCity,parseMeals,aptCode,dateKey};
+
+function parseSummaryFromPdfText(text, hotels){
+  // Best-effort rebuild of Summary AOA from a printed GO2 summary PDF.
+  const lines=String(text||'').split(/\r?\n/).map(l=>l.replace(/\u00a0/g,' ').trim()).filter(Boolean);
+  const sum=[];
+  // GT line
+  const gt=lines.find(l=>/VESELA|LEKES|\/[A-Z]+\s+M[RS]/i.test(l) && /\d+\./.test(l)) || '';
+  sum.push(['GT', gt.replace(/^GT\s*/i,'')]);
+  const pax=(text.match(/SOLD PAX\s+(\d+)/i)||[])[1]||'';
+  if(pax) sum.push(['SOLD PAX', pax]);
+  const contact=(text.match(/David:\s*([\+\d\s]+)/i)||[])[1];
+  if(contact) sum.push(['Guide contact', 'David: '+contact.trim()]);
+
+  // Flights: CARRIER + airport codes lines
+  sum.push([]);
+  sum.push(['carrier','destination','departure','destination','arrival','reservation']);
+  const flightRe=/\b([A-Z]{2}\s?\d{2,4})\b.*?\b([A-Z]{3})\b/g;
+  // From PDF text content objects we often get pairs; also parse GDS blocks
+  for(const m of String(text).matchAll(/\b([A-Z]{2})\s?(\d{2,4})\s+[A-Z]\s+(\d{2}[A-Z]{3})\s+\d\s+([A-Z]{3})([A-Z]{3})\s+HK\d/gi)){
+    sum.push([m[1]+' '+m[2], m[4], m[3], m[5], '', '']);
+  }
+  // Fallback simple: EK 140 PRG etc from layout — skip if already have
+  if(sum.filter(r=>/^[A-Z]{2}/i.test(String(r[0]||''))).length<2){
+    for(const l of lines){
+      const m=l.match(/^([A-Z]{2}\s?\d{2,4})\s+([A-Z]{3})\b/);
+      if(m) sum.push([m[1], m[2], '', '', '', '']);
+    }
+  }
+
+  // Transport block — pair "KIND  DATE" lines with later place lines is unreliable;
+  // extract KIND + TIME when on same line (common in pdftotext -layout)
+  sum.push([]);
+  sum.push(['transport','pick-up TIME','pick-up PLACE','drop-off PLACE','reservation','notes ']);
+  for(const l of lines){
+    const m=l.match(/^(TRF(?:\s+TO\s+[A-Z ]+)?|TRF\s*\+\s*MM|FOOD TOUR|HA NOI TOUR|HA LONG BAY|NINH BINH TOUR|HUE TOUR|HOI AN TOUR|CAT TIEN TOUR|PHU QUOC TOUR[^\d]*)\s+(\d{1,2}[A-Z]{3}[_\s].+)$/i);
+    if(m){
+      const kind=m[1].trim();
+      const pickup=m[2].trim();
+      let from='', to='';
+      if(/TRAIN/i.test(kind) && /TO TRAIN/i.test(kind)){ from='NINH BINH hotel'; to='NINH BINH train'; }
+      else if(/NINH BINH/i.test(kind) && /TRF/i.test(kind)){ from='HA LONG BAY cruise'; to='NINH BINH hotel'; }
+      else if(/MM|HOI AN/i.test(kind) && /TRF/i.test(kind)){ from='HUE hotel'; to='HOI AN hotel'; }
+      else if(/HA LONG/i.test(kind)){ from='HAN hotel'; to='HA LONG BAY cruise'; }
+      else if(/TOUR|FOOD/i.test(kind)){
+        const place=canonicalCity(kind)||'HA NOI';
+        const hk=place==='HA NOI'?'HAN hotel':place==='NINH BINH'?'NINH BINH hotel':place==='HUE'?'HUE hotel':place==='HOI AN'?'HOI AN hotel':place+' hotel';
+        from=hk; to=hk;
+      } else if(/^TRF$/i.test(kind)){
+        // Match flight arrival/departure on same day
+        const dk=dateKey(pickup);
+        const arrFl=sum.find(r=>/^[A-Z]{2}/i.test(String(r[0]||'')) && dateKey(r[2]||r[4]||'')===dk);
+        // Also scan full text for "HAN airport" near this date
+        if(/HAN airport/i.test(text) && /13:15|airport/i.test(pickup+l)){ from='HAN airport'; to='HAN hotel'; }
+        else if(/DAD airport/i.test(text) && /20:00|28AUG/i.test(pickup)){ from='HOI AN hotel'; to='DAD airport'; }
+        else if(/HUE train/i.test(text) && /09:10/i.test(pickup)){ from='HUE train'; to='HUE hotel'; }
+      }
+      sum.push([kind, pickup, from, to, '', '']);
+    }
+  }
+
+  // Accommodation: CITY + HOTEL on one line
+  sum.push([]);
+  sum.push(['accommodation','hotel','CHECK IN','CHECK OUT','reservation','room type']);
+  const cityHotel=[
+    [/HA NOI\s+(ORIENTAL[^\n]*)/i,'HA NOI'],
+    [/HA LONG BAY\s+(ASPIRA[^\n]*)/i,'HA LONG BAY'],
+    [/NINH BINH\s+(LALITA[^\n]*|TAM COC[^\n]*)/i,'NINH BINH'],
+    [/NIGHT TRAIN\s+(LOTUS[^\n]*)/i,'NIGHT TRAIN'],
+    [/^\s*HUE\s+(CHERISH[^\n]*)/im,'HUE'],
+    [/HOI AN\s+(HOI AN BEACH[^\n]*)/i,'HOI AN'],
+    [/DA\s*NANG\s+(CHICLAND[^\n]*)/i,'DANANG'],
+    [/CAT\s*TI[EÊ]N\s+([^\n]+)/i,'CAT TIEN'],
+    [/PH[UÚ]\s*QU[OỐ]C\s+([^\n]+)/i,'PHU QUOC'],
+  ];
+  const blob=lines.join('\n');
+  for(const [re, city] of cityHotel){
+    const m=blob.match(re);
+    if(m){
+      let hotel=m[1].trim().split(/\s{2,}|\t/)[0].trim();
+      hotel=hotel.replace(/\s+\d{2}[A-Z]{3}.*$/,'').trim();
+      sum.push([city, hotel, '', '', '', '']);
+    }
+  }
+
+  // Activities
+  sum.push([]);
+  sum.push(['activities','name','place','date and times','reservation','notes (meals...)']);
+  for(const l of lines){
+    const m=l.match(/^(\d*\/?\d*D(?:\d*N)?\s+.+?(?:TOUR|CRUISE|FOOD)[^,]*)(?:,\s*(ESG|CSG))?$/i);
+    if(m) sum.push([m[0], '', '', '', '', '']);
+  }
+  // Meal lines sometimes separate — attach raw meal phrases into a synthetic activity notes via leftover
+  const mealLines=lines.filter(l=>/Meal|meals|ăn\s|breakfast|lunch|dinner|street food/i.test(l));
+  if(mealLines.length && sum.length){
+    // append as notes on last activity-ish row
+    for(let i=sum.length-1;i>=0;i--){
+      if(/TOUR|CRUISE|FOOD/i.test(String(sum[i][0]||''))){ sum[i][5]=mealLines.join(' | '); break; }
+    }
+  }
+
+  const clients=[['Name','Surname','Sex']];
+  const seen=new Set();
+  for(const m of String(text).matchAll(/(\d+)\.([A-Z]+)\/([A-Z]+)(?:\s+(MR|MS|MRS|CHD))?/gi)){
+    const key=m[1]+'.'+m[2]+'/'+m[3];
+    if(seen.has(key)) continue;
+    seen.add(key);
+    clients.push([m[3], m[2], /MS|MRS/i.test(m[4]||'')?'F':'M']);
+  }
+  // Build workbook-like object for parseSummary
+  const wb={SheetNames:['Summary','Clients + Rooming list'], Sheets:{}};
+  wb.Sheets['Summary']=XLSX.utils.aoa_to_sheet(sum);
+  wb.Sheets['Clients + Rooming list']=XLSX.utils.aoa_to_sheet(clients.length>1?clients:[['Name','Surname','Sex'],['GUEST','UNKNOWN','M']]);
+  return parseSummary(wb, hotels);
+}
+
+global.Voucher={parseSummary,parseSummaryFromPdfText,loadHotels,saveHotelExtra,matchHotel,hotelBlock,todayVN,norm,renderVoucherDoc,mergeHotels,geminiHotelLookup,serperHotelLookup,tavilyHotelLookup,resolveHotelContact,enrichMissingHotels,hotelCacheGet,shortenAddress,canonicalCity,parseMeals,aptCode,dateKey};
 })(window);

@@ -104,5 +104,29 @@
     "address": "Bai Dai, Ganh Dau, Phu Quoc",
     "phone": "",
     "website": ""
+  },
+  {
+    "id": "lalita-boutique",
+    "aliases": [
+      "LALITA BOUTIQUE",
+      "LALITA BOUTIQUE HOTEL",
+      "LALITA"
+    ],
+    "name": "LALITA BOUTIQUE HOTEL",
+    "address": "Ninh Hai, Hoa Lu, Ninh Binh",
+    "phone": "",
+    "website": ""
+  },
+  {
+    "id": "chicland-danang",
+    "aliases": [
+      "CHICLAND HOTEL",
+      "CHICLAND",
+      "CHIC LAND"
+    ],
+    "name": "CHICLAND HOTEL",
+    "address": "4 Bach Dang, Hai Chau, Da Nang",
+    "phone": "",
+    "website": ""
   }
 ]

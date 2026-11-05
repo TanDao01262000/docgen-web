@@ -43,7 +43,7 @@ pre{white-space:pre-wrap;max-height:200px;overflow:auto;background:#f3f4f6;paddi
 </div>
 <div id="modeVoucher">
 <div class="card"><h2 data-i="v1">1. Tải file tổng hợp (.xlsx)</h2>
-<input type="file" id="vfile" accept=".xlsx,.xls"> <button id="vexbtn" onclick="vExtract()" data-i="vextract">Đọc &amp; xem trước</button>
+<input type="file" id="vfile" accept=".xlsx,.xls,.pdf"> <button id="vexbtn" onclick="vExtract()" data-i="vextract">Đọc &amp; xem trước</button>
 <div id="vinfo" class="muted"></div>
 <div id="vflags"></div></div>
 <div class="card"><h2 data-i="v2">2. Kiểm tra &amp; chỉnh sửa</h2>
@@ -84,7 +84,7 @@ nothing:'Nothing to generate.',saved:'Saved in this browser.',zip:'documents.zip
 
 I.vi.mode_g='Chế độ chung';I.en.mode_g='Generic mode';
 I.vi.mode_v='Chế độ Voucher (file tổng hợp → 2 voucher)';I.en.mode_v='Voucher mode (summary → 2 vouchers)';
-I.vi.v1='1. Tải file tổng hợp (.xlsx)';I.en.v1='1. Upload summary (.xlsx)';
+I.vi.v1='1. Tải file tổng hợp (.xlsx / .pdf)';I.en.v1='1. Upload summary (.xlsx / .pdf)';
 I.vi.vextract='Đọc & xem trước';I.en.vextract='Parse & preview';
 I.vi.v2='2. Kiểm tra & chỉnh sửa';I.en.v2='2. Review & edit';
 I.vi.v2d='Ô thiếu thông tin được tô vàng. Sửa trước khi tạo file.';I.en.v2d='Missing fields are highlighted. Edit before generating.';
@@ -181,8 +181,18 @@ async function vExtract(){
   try{
     VHOTELS=await Voucher.loadHotels();
     const buf=await f.arrayBuffer();
-    const wb=XLSX.read(buf);
-    VDATA=Voucher.parseSummary(wb, VHOTELS);
+    const n=(f.name||'').toLowerCase();
+    if(n.endsWith('.pdf')){
+      const {text,ocr}=await readPdf(buf);
+      if(!String(text||'').trim()) throw new Error(LANG==='vi'?'Không đọc được chữ từ PDF':'No text extracted from PDF');
+      VDATA=Voucher.parseSummaryFromPdfText(text, VHOTELS);
+      VDATA._source='pdf'; VDATA._ocr=ocr;
+    } else {
+      const wb=XLSX.read(buf);
+      VDATA=Voucher.parseSummary(wb, VHOTELS);
+      VDATA._source='xlsx';
+    }
+
     const need=VDATA.acc_rows.filter(r=>r.is_hotel&&r.missing);
     if(need.length){ vinfo.textContent=(LANG==='vi'?'Đang tra cứu khách sạn còn thiếu...':'Looking up missing hotels...'); await Voucher.enrichMissingHotels(VDATA, VHOTELS); }
     persistVoucher();
