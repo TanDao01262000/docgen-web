@@ -438,6 +438,8 @@ async function serperHotelLookup(query, city){
       }
       if(s>score){score=s; best=p;}
     }
+    // Reject weak / unrelated Places hits (e.g. garbage query matching random hotel)
+    if(score < 40) return {ok:false, reason:'low_score', score};
     const hotel={
       id:'serper-'+Date.now(),
       aliases:[query, best.title].filter(Boolean),
@@ -448,7 +450,7 @@ async function serperHotelLookup(query, city){
       source:'serper'
     };
     if(!hotel.address && !hotel.phone) return {ok:false, reason:'empty'};
-    return {ok:true, hotel};
+    return {ok:true, hotel, score};
   }catch(e){
     console.warn('Serper lookup failed', e);
     // network/CORS -> treat as fail, may fall back
@@ -518,6 +520,10 @@ async function tavilyHotelLookup(query, city){
     }
     const name=query;
     if(!address && !phone) return {ok:false, reason:'empty'};
+    // Require at least one meaningful query token to appear in the result blob
+    const tokens=norm(query).split(' ').filter(t=>t.length>=4);
+    const nb=norm(blob);
+    if(tokens.length && !tokens.some(tok=>nb.includes(tok))) return {ok:false, reason:'low_score'};
     const hotel={id:'tavily-'+Date.now(), aliases:[query], name, address, phone: (phone||'').trim(), website, source:'tavily'};
     return {ok:true, hotel};
   }catch(e){
@@ -545,7 +551,10 @@ async function resolveHotelContact(query, city){
     if(t.hotel.name) hotelCacheSet(t.hotel.name, t.hotel);
     return t.hotel;
   }
-  // 4) Gemini last resort
+  // 4) Gemini last resort — only when search APIs failed (quota/network/auth),
+  // not when they returned unrelated/empty hits for a garbage name.
+  const searchMiss = (s.reason==='low_score'||s.reason==='empty') && (t.reason==='low_score'||t.reason==='empty'||t.reason==='no_key');
+  if(searchMiss) return null;
   const g=await geminiHotelLookup([query, city, 'Vietnam'].filter(Boolean).join(' '));
   if(g && (g.address||g.phone)){
     hotelCacheSet(query, g);
@@ -568,6 +577,8 @@ async function enrichMissingHotels(data, hotels){
       r.matched_name=found.name; r.missing=false;
       r.source=found.source||'unknown';
       r.auto_lookup=true;
+      // Clear the earlier "missing address" warning for this hotel
+      data.flags=(data.flags||[]).filter(f=>!(f.level==='warn' && /Chưa có địa chỉ|No hotel address/i.test(f.msg||'') && norm(f.msg).includes(norm(q).slice(0,12))));
       if(found.source==='serper'){
         data.flags.push({level:'info', msg:'Từ tìm kiếm Google (Serper): '+found.name+(found.from_cache?' (cache)':'')});
       } else if(found.source==='tavily'){

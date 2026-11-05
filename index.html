@@ -3,7 +3,13 @@
 <script src="vendor/pdf.min.js"></script><script src="vendor/tesseract.min.js"></script><script src="vendor/xlsx.full.min.js"></script>
 <script src="vendor/pizzip.min.js"></script><script src="vendor/docxtemplater.js"></script><script src="vendor/jszip.min.js"></script>
 <script src="config.js"></script>
-<script src="config.local.js" onerror="void 0"></script>
+<script>
+// Optional local overrides (gitignored). Fetch so a missing file does not spam console 404 on Pages.
+fetch('config.local.js',{cache:'no-store'}).then(r=>r.ok?r.text():'').then(txt=>{
+  if(!txt) return;
+  const s=document.createElement('script'); s.textContent=txt; document.head.appendChild(s);
+}).catch(()=>{});
+</script>
 <script src="voucher.js"></script>
 <style>
 body{font-family:system-ui,sans-serif;max-width:980px;margin:24px auto;padding:0 16px;background:#f6f7fb;color:#222}
@@ -12,6 +18,14 @@ h1{margin:0 0 4px}h2{font-size:18px;margin:0 0 10px}button{background:#4f46e5;co
 button.sec{background:#e5e7eb;color:#222}table{border-collapse:collapse;width:100%;font-size:14px}td,th{border:1px solid #ddd;padding:4px}
 td input{width:100%;border:0;padding:4px;box-sizing:border-box}.muted{color:#666;font-size:13px}label.t{display:block;margin:4px 0}
 pre{white-space:pre-wrap;max-height:200px;overflow:auto;background:#f3f4f6;padding:8px;font-size:12px}input[type=password],select{padding:6px}
+.scrollx{overflow-x:auto;-webkit-overflow-scrolling:touch;max-width:100%}
+@media (max-width:640px){
+  body{padding:0 10px;margin:12px auto}
+  .card{padding:12px 14px}
+  table{font-size:12px}
+  td input,td textarea{font-size:12px}
+  button{padding:8px 12px}
+}
 </style></head><body>
 <div style="float:right"><button class="sec" id="langbtn" onclick="setLang(LANG=='vi'?'en':'vi')"></button></div><h1>📄 DocGen</h1><div class="muted" data-i="sub"></div>
 <div class="card" style="padding:10px 22px">
@@ -193,7 +207,7 @@ async function vExtract(){
 }
 function drawVacc(){
   const rows=VDATA.acc_rows;
-  vacc.innerHTML='<table><tr><th>STT</th><th>Loại</th><th>City / Train</th><th>Check-in</th><th>Check-out</th><th>Hotel block</th><th>Note</th></tr>'+
+  vacc.innerHTML='<div class="scrollx"><table><tr><th>STT</th><th>Loại</th><th>City / Train</th><th>Check-in</th><th>Check-out</th><th>Hotel block</th><th>Note</th></tr>'+
     rows.map((r,i)=>{
       const bg=r.missing?'background:#fef08a':'';
       if(r.is_train) return `<tr style="${bg}"><td>${i+1}</td><td>train</td><td colspan="5"><textarea rows="2" style="width:100%" oninput="VDATA.acc_rows[${i}].train_text=this.value">${(r.train_text||'').replace(/</g,'&lt;')}</textarea></td></tr>`;
@@ -204,17 +218,17 @@ function drawVacc(){
         <td><textarea rows="3" oninput="VDATA.acc_rows[${i}].hotel_block=this.value;VDATA.acc_rows[${i}].missing=false">${r.hotel_block||''}</textarea>
           ${r.source==='serper'?`<div class="muted">Từ tìm kiếm Google (Serper)</div>`:r.source==='tavily'?`<div class="muted">Từ tìm kiếm web (Tavily)</div>`:String(r.source||'').startsWith('gemini')?`<div style="color:#b91c1c;font-weight:600">⚠ Địa chỉ do AI tạo, có thể không chính xác – vui lòng kiểm tra trước khi tải</div>`:r.auto_lookup?`<div class="muted">tra cứu tự động – vui lòng kiểm tra</div>`:''}${r.missing?`<button class="sec" onclick="vSaveHotel(${i})">Lưu KS này</button>`:''}</td>
         <td><textarea rows="3" oninput="VDATA.acc_rows[${i}].note=this.value">${r.note||''}</textarea></td></tr>`;
-    }).join('')+'</table>';
+    }).join('')+'</table></div>';
 }
 function drawVtrf(){
   const rows=VDATA.trf_rows;
-  vtrf.innerHTML='<table><tr><th>STT</th><th>Label</th><th>Date</th><th>From</th><th>To</th><th>Note</th></tr>'+
+  vtrf.innerHTML='<div class="scrollx"><table><tr><th>STT</th><th>Label</th><th>Date</th><th>From</th><th>To</th><th>Note</th></tr>'+
     rows.map((r,i)=>`<tr style="${r.missing?'background:#fef08a':''}"><td>${i+1}</td>
       <td><textarea rows="2" oninput="VDATA.trf_rows[${i}].label=this.value">${r.label||''}</textarea></td>
       <td><input value="${r.date||''}" oninput="VDATA.trf_rows[${i}].date=this.value"></td>
       <td><textarea rows="3" oninput="VDATA.trf_rows[${i}].where_from=this.value">${r.where_from||''}</textarea></td>
       <td><textarea rows="3" oninput="VDATA.trf_rows[${i}].where_to=this.value">${r.where_to||''}</textarea></td>
-      <td><textarea rows="4" oninput="VDATA.trf_rows[${i}].note=this.value">${r.note||''}</textarea></td></tr>`).join('')+'</table>';
+      <td><textarea rows="4" oninput="VDATA.trf_rows[${i}].note=this.value">${r.note||''}</textarea></td></tr>`).join('')+'</table></div>';
 }
 function vSaveHotel(i){
   const r=VDATA.acc_rows[i];
