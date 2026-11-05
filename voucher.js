@@ -487,25 +487,69 @@ async function geminiHotelLookup(query){
     try{ return await call(false); } catch(e2){ console.warn('Gemini lookup failed', e2); return null; } }
 }
 
+
+async function tavilyHotelLookup(query, city){
+  const cfg=window.DOCGEN_CONFIG||{};
+  const key=cfg.TAVILY_API_KEY||'';
+  if(!key) return {ok:false, reason:'no_key'};
+  const q=[query, city, 'Vietnam', 'address', 'phone'].filter(Boolean).join(' ').replace(/\s+/g,' ').trim();
+  try{
+    const r=await fetch('https://api.tavily.com/search',{
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({api_key:key, query:q, include_answer:true, search_depth:'basic', max_results:5})
+    });
+    if(r.status===402||r.status===403||r.status===429) return {ok:false, reason:'quota', status:r.status};
+    if(!r.ok) return {ok:false, reason:'http', status:r.status};
+    const data=await r.json();
+    const blob=[data.answer||'', ...((data.results||[]).map(x=>((x.title||'')+'\n'+(x.content||'')+'\n'+(x.url||''))))].join('\n');
+    const phone=(blob.match(/(\+?\d[\d\s().-]{7,}\d)/)||[])[1]||'';
+    // prefer lines with address-like content
+    let address='';
+    const addrM=blob.match(/Address\s*[:\-]\s*([^\n]+)/i) || blob.match(/Địa chỉ\s*[:\-]\s*([^\n]+)/i);
+    if(addrM) address=addrM[1].trim();
+    if(!address){
+      const line=(blob.split(/\n/).find(l=>/,.*,/.test(l)&&( /Vietnam|Viet Nam|Hanoi|Hội An|Hoi An|Hue|Saigon|HCMC|Quảng|Street|St\.|Road/i.test(l)))||'');
+      address=line.replace(/^[^:]*:\s*/,'').trim().slice(0,180);
+    }
+    let website='';
+    for(const res of (data.results||[])){
+      const u=res.url||'';
+      if(u && !/tripadvisor|booking\.com|agoda|expedia|google\.|facebook|wikipedia/i.test(u)){ website=u; break; }
+    }
+    const name=query;
+    if(!address && !phone) return {ok:false, reason:'empty'};
+    const hotel={id:'tavily-'+Date.now(), aliases:[query], name, address, phone: (phone||'').trim(), website, source:'tavily'};
+    return {ok:true, hotel};
+  }catch(e){
+    console.warn('Tavily lookup failed', e);
+    return {ok:false, reason:'network', error:String(e)};
+  }
+}
+
 async function resolveHotelContact(query, city){
-  // 1) bundled/extra hotels already matched upstream; 2) localStorage cache
+  // 1) local cache
   const cached=cacheLookup(query) || (city?cacheLookup(city+' '+query):null);
   if(cached && (cached.address||cached.phone)) return {...cached, from_cache:true};
 
-  // 3) Serper (1 call)
+  // 2) Serper (1 call)
   const s=await serperHotelLookup(query, city);
   if(s.ok){
     hotelCacheSet(query, s.hotel);
     if(s.hotel.name) hotelCacheSet(s.hotel.name, s.hotel);
     return s.hotel;
   }
-  // 4) Gemini only if Serper quota/credits or empty/network
-  if(s.reason==='quota' || s.reason==='empty' || s.reason==='network' || s.reason==='http' || s.reason==='no_key'){
-    const g=await geminiHotelLookup([query, city, 'Vietnam'].filter(Boolean).join(' '));
-    if(g && (g.address||g.phone)){
-      hotelCacheSet(query, g);
-      return g;
-    }
+  // 3) Tavily if Serper failed
+  const t=await tavilyHotelLookup(query, city);
+  if(t.ok){
+    hotelCacheSet(query, t.hotel);
+    if(t.hotel.name) hotelCacheSet(t.hotel.name, t.hotel);
+    return t.hotel;
+  }
+  // 4) Gemini last resort
+  const g=await geminiHotelLookup([query, city, 'Vietnam'].filter(Boolean).join(' '));
+  if(g && (g.address||g.phone)){
+    hotelCacheSet(query, g);
+    return g;
   }
   return null;
 }
@@ -526,6 +570,8 @@ async function enrichMissingHotels(data, hotels){
       r.auto_lookup=true;
       if(found.source==='serper'){
         data.flags.push({level:'info', msg:'Từ tìm kiếm Google (Serper): '+found.name+(found.from_cache?' (cache)':'')});
+      } else if(found.source==='tavily'){
+        data.flags.push({level:'info', msg:'Từ tìm kiếm web (Tavily): '+found.name});
       } else if(String(found.source||'').startsWith('gemini')){
         data.flags.push({level:'ai', msg:'⚠ Địa chỉ do AI tạo, có thể không chính xác – vui lòng kiểm tra trước khi tải: '+found.name});
       }
@@ -534,5 +580,5 @@ async function enrichMissingHotels(data, hotels){
   return data;
 }
 
-global.Voucher={parseSummary,loadHotels,saveHotelExtra,matchHotel,hotelBlock,todayVN,norm,renderVoucherDoc,mergeHotels,geminiHotelLookup,serperHotelLookup,resolveHotelContact,enrichMissingHotels,hotelCacheGet};
+global.Voucher={parseSummary,loadHotels,saveHotelExtra,matchHotel,hotelBlock,todayVN,norm,renderVoucherDoc,mergeHotels,geminiHotelLookup,serperHotelLookup,tavilyHotelLookup,resolveHotelContact,enrichMissingHotels,hotelCacheGet};
 })(window);

@@ -22,21 +22,24 @@ jobs:
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           SERPER_API_KEY: ${{ secrets.SERPER_API_KEY }}
+          TAVILY_API_KEY: ${{ secrets.TAVILY_API_KEY }}
         run: |
           python3 - <<'PY'
           import os
           from pathlib import Path
           g = os.environ.get("GEMINI_API_KEY") or ""
           s = os.environ.get("SERPER_API_KEY") or ""
+          t = os.environ.get("TAVILY_API_KEY") or ""
           Path("config.js").write_text(
               "window.DOCGEN_CONFIG=Object.assign(window.DOCGEN_CONFIG||{},{\n"
               f"  GEMINI_API_KEY: {g!r},\n"
               f"  SERPER_API_KEY: {s!r},\n"
+              f"  TAVILY_API_KEY: {t!r},\n"
               "  GEMINI_MODEL: 'gemini-3.5-flash-lite'\n"
               "});\n",
               encoding="utf-8",
           )
-          print("config.js written; gemini_len=", len(g), "serper_len=", len(s))
+          print("config.js written; gemini_len=", len(g), "serper_len=", len(s), "tavily_len=", len(t))
           PY
       - name: Setup Pages
         uses: actions/configure-pages@v5

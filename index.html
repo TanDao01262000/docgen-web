@@ -44,7 +44,7 @@ pre{white-space:pre-wrap;max-height:200px;overflow:auto;background:#f3f4f6;paddi
 <button class="sec" onclick="vExportHotels()" data-i="vexphotels">Xuất danh sách KS</button>
 <button class="sec" onclick="document.getElementById('vimp').click()" data-i="vimphotels">Nhập danh sách KS</button>
 <input type="file" id="vimp" accept=".json" style="display:none" onchange="vImportHotels(event)"></p>
-</div></div>
+</div>
 <details class="card"><summary><b data-i="set"></b></summary>
 <p class="muted" data-i="setd"></p>
 <select id="prov"><option value="" data-i="off"></option><option value="groq">Groq</option><option value="gemini">Gemini</option></select>
@@ -78,6 +78,7 @@ I.vi.vguests='Danh sách khách (mỗi dòng một người)';I.en.vguests='Gues
 I.vi.vacc='Khách sạn / tàu';I.en.vacc='Hotels / train';
 I.vi.vtrf='Transfers / tours';I.en.vtrf='Transfers / tours';
 I.vi.vgen='Tạo 2 voucher & tải về';I.en.vgen='Generate 2 vouchers & download';
+I.vi.vneedparse='Chưa có dữ liệu để tạo voucher. Vui lòng chọn file tổng hợp và bấm "Đọc & xem trước" trước.';I.en.vneedparse='Nothing to generate yet. Please upload the summary file and click Parse & preview first.';
 I.vi.vexphotels='Xuất danh sách KS';I.en.vexphotels='Export hotel list';
 I.vi.vimphotels='Nhập danh sách KS';I.en.vimphotels='Import hotel list';
 
@@ -141,26 +142,54 @@ prov.value=localStorage.prov||'';key.value=localStorage.key||'';
 
 let VDATA=null, VHOTELS=[];
 function setMode(m){modeGeneric.style.display=m==='generic'?'block':'none';modeVoucher.style.display=m==='voucher'?'block':'none'}
+function voucherReady(){
+  return !!(VDATA && Array.isArray(VDATA.acc_rows) && Array.isArray(VDATA.trf_rows));
+}
+function persistVoucher(){
+  try{ sessionStorage.setItem('docgen_voucher', JSON.stringify(VDATA)); }catch(e){}
+}
+function restoreVoucher(){
+  try{
+    const raw=sessionStorage.getItem('docgen_voucher');
+    if(!raw) return false;
+    VDATA=JSON.parse(raw);
+    if(!voucherReady()) { VDATA=null; return false; }
+    v_update.value=VDATA.update_date||''; v_pax.value=VDATA.pax||''; v_contact.value=VDATA.contact||'';
+    v_guests.value=(VDATA.guests||[]).join('\n');
+    vinfo.textContent=(LANG==='vi'?`Đã khôi phục: ${VDATA.acc_rows.length} dòng KS/tàu, ${VDATA.trf_rows.length} transfer/tour.`:`Restored parsed voucher data.`);
+    drawVacc(); drawVtrf();
+    return true;
+  }catch(e){ VDATA=null; return false; }
+}
 async function vExtract(){
   const f=vfile.files[0]; if(!f) return alert(t('pick'));
   vinfo.textContent=t('extracting');
-  VHOTELS=await Voucher.loadHotels();
-  const buf=await f.arrayBuffer();
-  const wb=XLSX.read(buf);
-  VDATA=Voucher.parseSummary(wb, VHOTELS);
-  const need=VDATA.acc_rows.filter(r=>r.is_hotel&&r.missing);
-  if(need.length){ vinfo.textContent=(LANG==='vi'?'Đang tra cứu khách sạn còn thiếu...':'Looking up missing hotels...'); await Voucher.enrichMissingHotels(VDATA, VHOTELS); }
-  vinfo.textContent=(LANG==='vi'?`Đã đọc: ${VDATA.acc_rows.length} dòng KS/tàu, ${VDATA.trf_rows.length} transfer/tour.`:`Parsed: ${VDATA.acc_rows.length} hotel/train rows, ${VDATA.trf_rows.length} transfers.`);
-  vflags.innerHTML=VDATA.flags.map(x=>{
-    const ai=x.level==='ai'||/AI tạo|không chính xác/i.test(x.msg);
-    const bg=ai?'#fee2e2':'#fef3c7'; const border=ai?'border:1px solid #ef4444':'';
-    return `<div style="background:${bg};padding:8px;margin:4px 0;border-radius:6px;${border}">${x.msg}</div>`;
-  }).join('');
-  if(VDATA.acc_rows.some(r=>String(r.source||'').startsWith('gemini'))){
-    vflags.innerHTML = `<div style="background:#ffedd5;border:2px solid #f97316;padding:10px;margin:6px 0;border-radius:8px;font-weight:600">⚠ Có địa chỉ do AI tạo trong voucher — vui lòng kiểm tra kỹ trước khi tải file.</div>` + vflags.innerHTML;
+  try{
+    VHOTELS=await Voucher.loadHotels();
+    const buf=await f.arrayBuffer();
+    const wb=XLSX.read(buf);
+    VDATA=Voucher.parseSummary(wb, VHOTELS);
+    const need=VDATA.acc_rows.filter(r=>r.is_hotel&&r.missing);
+    if(need.length){ vinfo.textContent=(LANG==='vi'?'Đang tra cứu khách sạn còn thiếu...':'Looking up missing hotels...'); await Voucher.enrichMissingHotels(VDATA, VHOTELS); }
+    persistVoucher();
+    vinfo.textContent=(LANG==='vi'?`Đã đọc: ${VDATA.acc_rows.length} dòng KS/tàu, ${VDATA.trf_rows.length} transfer/tour. (có thể tạo voucher ngay)`:`Parsed: ${VDATA.acc_rows.length} hotel/train rows, ${VDATA.trf_rows.length} transfers.`);
+    vflags.innerHTML=VDATA.flags.map(x=>{
+      const ai=x.level==='ai'||/AI tạo|không chính xác/i.test(x.msg);
+      const bg=ai?'#fee2e2':'#fef3c7'; const border=ai?'border:1px solid #ef4444':'';
+      return `<div style="background:${bg};padding:8px;margin:4px 0;border-radius:6px;${border}">${x.msg}</div>`;
+    }).join('');
+    if(VDATA.acc_rows.some(r=>String(r.source||'').startsWith('gemini'))){
+      vflags.innerHTML = `<div style="background:#ffedd5;border:2px solid #f97316;padding:10px;margin:6px 0;border-radius:8px;font-weight:600">⚠ Có địa chỉ do AI tạo trong voucher — vui lòng kiểm tra kỹ trước khi tải file.</div>` + vflags.innerHTML;
+    }
+    v_update.value=VDATA.update_date; v_pax.value=VDATA.pax; v_contact.value=VDATA.contact; v_guests.value=VDATA.guests.join('\n');
+    drawVacc(); drawVtrf();
+  }catch(e){
+    console.error(e);
+    VDATA=null;
+    try{ sessionStorage.removeItem('docgen_voucher'); }catch(_){}
+    vinfo.textContent=(LANG==='vi'?'Lỗi đọc file: ':'Error: ')+(e.message||e);
+    alert(vinfo.textContent);
   }
-  v_update.value=VDATA.update_date; v_pax.value=VDATA.pax; v_contact.value=VDATA.contact; v_guests.value=VDATA.guests.join('\n');
-  drawVacc(); drawVtrf();
 }
 function drawVacc(){
   const rows=VDATA.acc_rows;
@@ -173,7 +202,7 @@ function drawVacc(){
         <td><input value="${(r.check_in||'').replace(/"/g,'&quot;')}" oninput="VDATA.acc_rows[${i}].check_in=this.value"></td>
         <td><textarea rows="2" oninput="VDATA.acc_rows[${i}].check_out=this.value">${r.check_out||''}</textarea></td>
         <td><textarea rows="3" oninput="VDATA.acc_rows[${i}].hotel_block=this.value;VDATA.acc_rows[${i}].missing=false">${r.hotel_block||''}</textarea>
-          ${r.source==='serper'?`<div class="muted">Từ tìm kiếm Google (Serper)</div>`:String(r.source||'').startsWith('gemini')?`<div style="color:#b91c1c;font-weight:600">⚠ Địa chỉ do AI tạo, có thể không chính xác – vui lòng kiểm tra trước khi tải</div>`:r.auto_lookup?`<div class="muted">tra cứu tự động – vui lòng kiểm tra</div>`:''}${r.missing?`<button class="sec" onclick="vSaveHotel(${i})">Lưu KS này</button>`:''}</td>
+          ${r.source==='serper'?`<div class="muted">Từ tìm kiếm Google (Serper)</div>`:r.source==='tavily'?`<div class="muted">Từ tìm kiếm web (Tavily)</div>`:String(r.source||'').startsWith('gemini')?`<div style="color:#b91c1c;font-weight:600">⚠ Địa chỉ do AI tạo, có thể không chính xác – vui lòng kiểm tra trước khi tải</div>`:r.auto_lookup?`<div class="muted">tra cứu tự động – vui lòng kiểm tra</div>`:''}${r.missing?`<button class="sec" onclick="vSaveHotel(${i})">Lưu KS này</button>`:''}</td>
         <td><textarea rows="3" oninput="VDATA.acc_rows[${i}].note=this.value">${r.note||''}</textarea></td></tr>`;
     }).join('')+'</table>';
 }
@@ -207,19 +236,31 @@ async function vImportHotels(ev){
   localStorage.hotelDir=JSON.stringify(arr); alert(t('saved'));
 }
 async function vGen(){
-  if(!VDATA) return alert(t('pick'));
-  VDATA.update_date=v_update.value; VDATA.pax=v_pax.value; VDATA.contact=v_contact.value;
-  VDATA.guests=v_guests.value.split('\n').map(s=>s.trim()).filter(Boolean);
-  VDATA.guest_lines=VDATA.guests.join('\n');
-  // ensure boolean flags for docxtemplater
-  VDATA.acc_rows=VDATA.acc_rows.map(r=>({...r, is_hotel:!!r.is_hotel, is_train:!!r.is_train}));
-  const a=await Voucher.renderVoucherDoc('voucher_accommodation.docx', VDATA);
-  const b=await Voucher.renderVoucherDoc('voucher_transfers.docx', VDATA);
-  const z=new JSZip(); z.file('VOUCHER-ACCOMMODATION.docx',a); z.file('VOUCHER-TRANSFERS.docx',b);
-  const blob=await z.generateAsync({type:'blob'});
-  const link=document.createElement('a'); link.href=URL.createObjectURL(blob); link.download='vouchers.zip'; link.click();
+  // Never re-check the file input — use parsed data only
+  if(!voucherReady()){
+    restoreVoucher();
+  }
+  if(!voucherReady()) return alert(t('vneedparse')||t('pick'));
+  try{
+    VDATA.update_date=v_update.value; VDATA.pax=v_pax.value; VDATA.contact=v_contact.value;
+    VDATA.guests=v_guests.value.split('\n').map(s=>s.trim()).filter(Boolean);
+    VDATA.guest_lines=VDATA.guests.join('\n');
+    VDATA.acc_rows=VDATA.acc_rows.map(r=>({...r, is_hotel:!!r.is_hotel, is_train:!!r.is_train}));
+    persistVoucher();
+    vinfo.textContent=(LANG==='vi'?'Đang tạo file Word...':'Generating Word files...');
+    const a=await Voucher.renderVoucherDoc('voucher_accommodation.docx', VDATA);
+    const b=await Voucher.renderVoucherDoc('voucher_transfers.docx', VDATA);
+    const z=new JSZip(); z.file('VOUCHER-ACCOMMODATION.docx',a); z.file('VOUCHER-TRANSFERS.docx',b);
+    const blob=await z.generateAsync({type:'blob'});
+    const link=document.createElement('a'); link.href=URL.createObjectURL(blob); link.download='vouchers.zip'; link.click();
+    vinfo.textContent=(LANG==='vi'?'Đã tạo vouchers.zip':'Downloaded vouchers.zip');
+  }catch(e){
+    console.error(e);
+    alert((LANG==='vi'?'Lỗi khi tạo voucher: ':'Generate error: ')+(e.message||e));
+  }
 }
 setMode('voucher');
+restoreVoucher();
 
 setLang(LANG);loadT();
 </script></body></html>
