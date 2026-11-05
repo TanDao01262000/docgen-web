@@ -78,5 +78,31 @@
     "address": "",
     "phone": "",
     "website": ""
+  },
+  {
+    "id": "cat-tien-jungle",
+    "aliases": [
+      "Cat Tien Jungle Lodge",
+      "CAT TIEN JUNGLE LODGE",
+      "Jungle Lodge Cat Tien",
+      "Cát Tiên Jungle Lodge"
+    ],
+    "name": "CAT TIEN JUNGLE LODGE",
+    "address": "Nam Cat Tien, Tan Phu, Dong Nai",
+    "phone": "",
+    "website": ""
+  },
+  {
+    "id": "salinda-pq",
+    "aliases": [
+      "Salinda Resort Phu Quoc",
+      "SALINDA RESORT",
+      "Salinda Phu Quoc",
+      "Salinda Resort"
+    ],
+    "name": "SALINDA RESORT PHU QUOC",
+    "address": "Bai Dai, Ganh Dau, Phu Quoc",
+    "phone": "",
+    "website": ""
   }
 ]

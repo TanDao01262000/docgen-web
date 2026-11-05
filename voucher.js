@@ -23,6 +23,153 @@ function fmtFlight(a){
   // Keep summary spelling (e.g. "VN 036" vs "VN119"); only collapse whitespace
   return String(a||'').trim().replace(/\s+/g,' ');
 }
+
+function shortenAddress(addr){
+  let a=String(addr||'').replace(/\s+/g,' ').trim();
+  if(!a) return '';
+  // Plus Codes e.g. 7P28+X5 / RJ8G+6V Phu Quoc
+  a=a.replace(/\b[A-Z0-9]{4,}\+[A-Z0-9]{2,}\b/gi,'');
+  // postal / zip
+  a=a.replace(/\b\d{4,6}\b/g,(m,off,str)=>{
+    // keep street numbers that are short and mid-string; drop 5-6 digit zips
+    return m.length>=5?'':m;
+  });
+  a=a.replace(/,?\s*(Socialist Republic of )?Viet\s*Nam\b/ig,'');
+  a=a.replace(/,?\s*Vietnam\b/ig,'');
+  // collapse duplicate province/city tokens
+  const parts=a.split(/,\s*/).map(x=>x.trim()).filter(Boolean);
+  const seen=new Set(); const out=[];
+  for(const part of parts){
+    const k=norm(part);
+    if(!k||seen.has(k)) continue;
+    // drop pure "Province" noise if city already present
+    seen.add(k); out.push(part);
+  }
+  a=out.join(', ').replace(/\s+,/g,',').replace(/,\s*,/g,',').replace(/^,\s*|,\s*$/g,'').trim();
+  if(a.length>90){
+    // keep first ~2-3 comma segments
+    const segs=a.split(/,\s*/);
+    a=segs.slice(0, Math.min(3, segs.length)).join(', ');
+    if(a.length>90) a=a.slice(0,87).replace(/\s+\S*$/,'')+'…';
+  }
+  return a;
+}
+function canonicalCity(raw){
+  const n=norm(raw);
+  if(!n) return '';
+  if(/HA\s*NOI|HANOI|\bHAN\b/.test(n) && !/HOTEL|AIRPORT/.test(n)) return 'HA NOI';
+  if(/HA\s*LONG|HALONG/.test(n)) return 'HA LONG BAY';
+  if(/NINH\s*BINH/.test(n)) return 'NINH BINH';
+  if(/^HUE\b|HUE\b/.test(n) && !/HOTEL/.test(n)) return 'HUE';
+  if(/HOI\s*AN/.test(n)) return 'HOI AN';
+  if(/SAI\s*GON|SAIGON|HCMC|HO\s*CHI\s*MINH/.test(n)) return 'SAI GON';
+  if(/CAT\s*TIEN|CATTIEN/.test(n)) return 'CAT TIEN';
+  if(/PHU\s*QUOC|\bPQC\b|\bPQ\b/.test(n)) return 'PHU QUOC';
+  if(/DA\s*NANG|DANANG/.test(n)) return 'DA NANG';
+  if(/NHA\s*TRANG/.test(n)) return 'NHA TRANG';
+  return n.replace(/\bHOMESTAY\b/,'').replace(/\bHOTEL\b$/,'').trim();
+}
+const VN_AIRPORTS=new Set(['HAN','SGN','DAD','PQC','CXR','DLI','VCA','HPH','VII','UIH','VDO','VDH','VXN','VKG','THD','DIN','PXU','UIH','BMV','CAH','VCS','TBB']);
+function aptCode(label){
+  const n=norm(label);
+  if(/\bHAN\b|HA\s*NOI|HANOI/.test(n)) return 'HAN';
+  if(/\bSGN\b|SAI\s*GON|SAIGON|HCMC|TAN\s*SON/.test(n)) return 'SGN';
+  if(/\bDAD\b|DA\s*NANG|DANANG/.test(n)) return 'DAD';
+  if(/\bPQC\b|PHU\s*QUOC|\bPQ\b/.test(n)) return 'PQC';
+  if(/\bCXR\b|NHA\s*TRANG|CAM\s*RANH/.test(n)) return 'CXR';
+  if(/\bDLI\b|DA\s*LAT|DALAT/.test(n)) return 'DLI';
+  const m=n.match(/\b([A-Z]{3})\b/);
+  return m?m[1]:'';
+}
+function isVnAirport(code){ return VN_AIRPORTS.has(String(code||'').toUpperCase()); }
+function flightIsDomestic(fl){
+  if(!fl) return null;
+  const a=aptCode(fl.from), b=aptCode(fl.to);
+  if(!a||!b) return null;
+  return isVnAirport(a)&&isVnAirport(b);
+}
+const APT_PICKUP={
+  HAN:{name:'Hanoi', intl:{term:'international terminal', pillar:'pillar no.10'}, dom:{term:'domestic terminal', pillar:'pillar no.10'}},
+  SGN:{name:'Sai Gon', intl:{term:'international terminal', pillar:'pillar no. 23B'}, dom:{term:'domestic terminal', pillar:'pillar no. 23B'}},
+  DAD:{name:'Da Nang', intl:{term:'international terminal', pillar:'the arrivals hall'}, dom:{term:'Domestic terminal', pillar:'the arrivals hall'}},
+  PQC:{name:'Phu Quoc', intl:{term:'international terminal', pillar:'the arrivals hall'}, dom:{term:'domestic terminal', pillar:'the arrivals hall'}},
+  CXR:{name:'Cam Ranh', intl:{term:'international terminal', pillar:'the arrivals hall'}, dom:{term:'domestic terminal', pillar:'the arrivals hall'}},
+  DLI:{name:'Da Lat', intl:{term:'terminal', pillar:'the arrivals hall'}, dom:{term:'terminal', pillar:'the arrivals hall'}}
+};
+function airportArrivalNote(code, fl, surname){
+  const dom=flightIsDomestic(fl);
+  const rule=APT_PICKUP[code];
+  if(!rule){
+    return {note:`The driver will pick you up at the airport arrivals hall with a sign:\n\n GO2/ MR. ${surname.toUpperCase()}`, unknown:true, kind:dom===false?'international':dom===true?'domestic':'unknown'};
+  }
+  const side=(dom===false)?rule.intl:rule.dom;
+  const kind=dom===false?'international':dom===true?'domestic':(dom===null?'unknown':'domestic');
+  // Prefer sample-style phrasing for HAN intl / SGN domestic
+  if(code==='HAN' && dom===false)
+    return {note:`The driver will pick you up at the international terminal (outside the arrivals hall at ${side.pillar}) with a sign:\n\n GO2/ MR. ${surname.toUpperCase()}`, unknown:false, kind:'international'};
+  if(code==='SGN' && dom!==false)
+    return {note:`The driver will pick you up at the domestic terminal of Sai Gon airport (outside the arrivals hall ${side.pillar}) with a sign:\n\n GO2/ MR. ${surname.toUpperCase()}`, unknown:false, kind:'domestic'};
+  const termLabel=side.term;
+  const where=(/arrivals hall/i.test(side.pillar) && !/pillar/i.test(side.pillar))
+    ? `at the ${termLabel} of ${rule.name} airport (outside the arrivals hall)`
+    : `at the ${termLabel} of ${rule.name} airport (outside the arrivals hall at ${side.pillar})`;
+  return {note:`The driver will pick you up ${where} with a sign:\n\n GO2/ MR. ${surname.toUpperCase()}`, unknown:dom===null, kind};
+}
+function airportDropoffNote(code, fl){
+  const dom=flightIsDomestic(fl);
+  const rule=APT_PICKUP[code];
+  const kind=dom===false?'International':dom===true?'Domestic':'';
+  if(!rule){
+    return {note:`The driver will pick you up at the hotel reception and drop you off at the airport.`, unknown:true, kind:kind||'unknown'};
+  }
+  const term=(dom===false)?'International terminal':(dom===true)?'Domestic terminal':((code==='DAD')?'Domestic terminal':'terminal');
+  if(code==='DAD')
+    return {note:`The driver will pick you up at the hotel reception and drop you off at the Domestic terminal of Da Nang airport.`, unknown:dom===null, kind:kind||'Domestic'};
+  if(code==='SGN' && dom===false)
+    return {note:`The driver will pick you up at the hotel reception and drop you off at the International terminal of Saigon airport.`, unknown:false, kind:'International'};
+  return {note:`The driver will pick you up at the hotel reception and drop you off at the ${term} of ${rule.name} airport.`, unknown:dom===null&&!kind, kind:kind||term};
+}
+function dateKey(s){
+  const m=String(s||'').match(/(\d{1,2})\s*[.\-\s]*([A-Za-z]{3})/);
+  if(!m) return '';
+  return m[1].padStart(2,'0')+m[2].toUpperCase().slice(0,3);
+}
+function parseMeals(blob){
+  const s=String(blob||'');
+  if(!s.trim()) return 'No meals';
+  if(/Meal:\s*Street food/i.test(s)) return 'Street food';
+  if(/street\s*food/i.test(s)) return /Meal:/i.test(s)?'Street food':'street food';
+  // explicit no
+  const hasFoodToken=/breakfast|lunch|dinner|brunch|ăn\s*sáng|an\s*sang|ăn\s*trưa|an\s*trua|ăn\s*tối|an\s*toi|\bB\s*\/\s*L|\bL\s*\/\s*D|\bB\s*&\s*L|meals?\s*:/i.test(s);
+  if(/Meal:\s*no\b|no\s*meals?|không\s*(có\s*)?(bữa|ăn)|khong\s*(co\s*)?(bua|an)|Meal:\s*no\b/i.test(s) && !hasFoodToken) return 'No meals';
+  // cruise-style counts
+  const b=(s.match(/(\d+)\s*breakfasts?/i)||s.match(/(\d+)\s*ăn\s*sáng/i)||[])[1];
+  const l=(s.match(/(\d+)\s*lunches?/i)||s.match(/(\d+)\s*ăn\s*trưa/i)||s.match(/Meal:\s*(\d+)\s*LUNCH/i)||[])[1];
+  const d=(s.match(/(\d+)\s*dinners?/i)||s.match(/(\d+)\s*ăn\s*tối/i)||[])[1];
+  if(b||l||d){
+    const parts=[];
+    if(b) parts.push(b==='1'?'1 breakfast':`${b} breakfasts`);
+    if(l) parts.push(l==='1'?'1 lunch':`${l} lunches`);
+    if(d) parts.push(d==='1'?'1 dinner':`${d} dinners`);
+    return parts.join(', ');
+  }
+  if(/\bB\s*\/\s*L\s*\/\s*D\b/i.test(s)) return 'breakfast, lunch, dinner';
+  if(/\bB\s*\/\s*L\b/i.test(s)) return 'breakfast, lunch';
+  if(/\bL\s*\/\s*D\b/i.test(s)) return 'lunch, dinner';
+  const parts=[];
+  if(/breakfast|ăn\s*sáng|an\s*sang/i.test(s)) parts.push('breakfast');
+  if(/lunch|ăn\s*trưa|an\s*trua/i.test(s)) parts.push('lunch');
+  if(/dinner|ăn\s*tối|an\s*toi/i.test(s)) parts.push('dinner');
+  if(parts.length) return parts.join(', ');
+  // Meal: 1 LUNCH style already handled; bare "Meal: lunch"
+  const m=s.match(/Meals?\s*[:\-]\s*([^\n,;]+)/i);
+  if(m){
+    const v=m[1].trim();
+    if(/^no\b/i.test(v)) return 'No meals';
+    return v;
+  }
+  return 'No meals';
+}
 function sheetMatrix(wb, name){
   const ws=wb.Sheets[name]; if(!ws) return [];
   return XLSX.utils.sheet_to_json(ws,{header:1,defval:'',raw:false});
@@ -76,7 +223,8 @@ function matchHotel(hotels, name){
 function hotelBlock(h){
   if(!h) return '';
   const lines=[h.name];
-  if(h.address) lines.push(h.address);
+  const addr=shortenAddress(h.address||'');
+  if(addr) lines.push(addr);
   if(h.phone) lines.push((/telefon/i.test(h.phone)?'':'Tel: ')+h.phone.replace(/^Tel(efon)?\s*:\s*/i,''));
   if(h.website) lines.push('Web: '+h.website);
   return lines.join('\n');
@@ -88,11 +236,16 @@ function resolvePlace(label, hotels, hotelByCity){
     'HAN HOTEL':'HA NOI','HANOI HOTEL':'HA NOI','HA NOI HOTEL':'HA NOI',
     'HA LONG BAY CRUISE':'HA LONG BAY','HALONG BAY CRUISE':'HA LONG BAY',
     'NINH BINH HOTEL':'NINH BINH','HUE HOTEL':'HUE','HOI AN BEACH':'HOI AN','HOI AN HOTEL':'HOI AN',
-    'SGN HOTEL':'SAI GON','SAI GON HOTEL':'SAI GON','HCMC HOTEL':'SAI GON'
+    'SGN HOTEL':'SAI GON','SAI GON HOTEL':'SAI GON','HCMC HOTEL':'SAI GON',
+    'CAT TIEN HOTEL':'CAT TIEN','CAT TIEN':'CAT TIEN','CATTIEN':'CAT TIEN',
+    'PHU QUOC HOTEL':'PHU QUOC','PHU QUOC':'PHU QUOC','PQC HOTEL':'PHU QUOC','PQ HOTEL':'PHU QUOC',
+    'DA NANG HOTEL':'DA NANG','NHA TRANG HOTEL':'NHA TRANG'
   };
   for(const [k,city] of Object.entries(cityMap)){
     if(n===k||n.includes(k)){const h=hotelByCity[city]; if(h) return h;}
   }
+  const cc=canonicalCity(label);
+  if(cc && hotelByCity[cc]) return hotelByCity[cc];
   return matchHotel(hotels, label);
 }
 
@@ -147,21 +300,37 @@ function parseSummary(wb, hotels){
     }
   }
 
-  // sections
-  const accStart=findRow(sum,r=>/^accommodation$/i.test(cell(r,0)));
-  const actStart=findRow(sum,r=>/^activities$/i.test(cell(r,0)));
-  const trStart=findRow(sum,r=>/^transport$/i.test(cell(r,0)));
+  // sections — detect by header labels (order-independent)
+  const isAccHdr=(r)=>/^accommodation$/i.test(cell(r,0)) || (/^hotel$/i.test(cell(r,1)) && /check\s*in/i.test(cell(r,2)));
+  const isActHdr=(r)=>/^activities$/i.test(cell(r,0)) || (/^name$/i.test(cell(r,1)) && /place/i.test(cell(r,2)) && /date/i.test(cell(r,3)));
+  const isTrHdr=(r)=>/^transport$/i.test(cell(r,0)) || (/pick-?up\s*TIME/i.test(cell(r,1)) && /pick-?up\s*PLACE/i.test(cell(r,2)));
+  const accStart=findRow(sum,isAccHdr);
+  const actStart=findRow(sum,isActHdr);
+  const trStart=findRow(sum,isTrHdr);
+  function sectionEnd(start){
+    if(start<0) return -1;
+    let end=sum.length;
+    for(const s of [accStart,actStart,trStart]){
+      if(s>start && s<end) end=s;
+    }
+    // also stop at other known headers
+    for(let i=start+1;i<end;i++){
+      const a=cell(sum[i],0);
+      if(/^(accommodation|activities|transport|nett rate|international tickets|checklist)/i.test(a) && i!==start) { end=i; break; }
+    }
+    return end;
+  }
 
   // accommodations
   const acc_rows=[];
   const hotelByCity={};
   if(accStart>=0){
-    for(let i=accStart+1;i<sum.length;i++){
-      if(actStart>=0&&i>=actStart) break;
-      if(/^activities$/i.test(cell(sum[i],0))) break;
+    const accEnd=sectionEnd(accStart);
+    for(let i=accStart+1;i<accEnd;i++){
       const city=cell(sum[i],0), hotel=cell(sum[i],1), cin=cell(sum[i],2), cout=cell(sum[i],3);
       const res=cell(sum[i],4), room=cell(sum[i],5);
-      if(!city||/^2\s*pax$/i.test(city)||/^accommodation$/i.test(city)) continue;
+      if(!city||/^2\s*pax$/i.test(city)||/^accommodation$/i.test(city)||/^hotel$/i.test(city)) continue;
+      if(/check\s*in/i.test(cin) && /^hotel$/i.test(hotel)) continue; // header
       if(!hotel&&!cin) continue;
       const isTrain=/train/i.test(city)||/train/i.test(hotel)||/lotus/i.test(hotel);
       if(isTrain){
@@ -184,30 +353,29 @@ function parseSummary(wb, hotels){
       let check_out=coutP.dayMon||cout;
       if(coutP.late) check_out=(coutP.dayMon||cout.replace(/-.*/,'').trim())+'\n+ Late check out';
       const h=matchHotel(hotels, hotel);
-      if(!h) flags.push({level:'warn', msg:`Chưa có địa chỉ khách sạn: ${hotel}`});
-      else hotelByCity[norm(city).replace(' HOMESTAY','').replace('HA NOI','HA NOI')]=h;
-      // map city keys
-      const cityKey=city.replace(/ HOMESTAY/i,'').trim().toUpperCase();
-      if(h) hotelByCity[cityKey]=h;
-      if(/HA NOI/i.test(city)) hotelByCity['HA NOI']=h||hotelByCity['HA NOI'];
-      if(/HA LONG/i.test(city)) hotelByCity['HA LONG BAY']=h;
-      if(/NINH BINH/i.test(city)) hotelByCity['NINH BINH']=h;
-      if(/^HUE/i.test(city)) hotelByCity['HUE']=h;
-      if(/HOI AN/i.test(city)) hotelByCity['HOI AN']=h;
-      if(/SAI GON|SAIGON/i.test(city)) hotelByCity['SAI GON']=h;
+      const cityKey=canonicalCity(city) || norm(city).replace(/ HOMESTAY$/,'');
+      if(!h) flags.push({level:'warn', msg:`Chưa có địa chỉ khách sạn: ${hotel||city}`});
+      if(h && cityKey) hotelByCity[cityKey]=h;
+      // also index common aliases
+      if(h){
+        for(const alias of [cityKey, canonicalCity(hotel), norm(hotel)]){
+          if(alias) hotelByCity[alias]=h;
+        }
+      }
 
       const note=[res, room].filter(Boolean).join('\n\n');
+      const displayName=(h&&h.name)||hotel||city;
       acc_rows.push({
         is_hotel:true, is_train:false,
-        city: cityKey==='SAI GON'?'SAI GON':cityKey,
+        city: cityKey||norm(city),
         check_in: cinP.dayMon||cin,
         check_out,
-        hotel_name: hotel,
-        hotel_block: h?hotelBlock(h):(hotel+'\n'),
+        hotel_name: hotel||displayName,
+        hotel_block: h?hotelBlock(h):(displayName+(hotel&&hotel!==displayName?'':'')+'\n'),
         note, room, reservation:res,
         missing: !h || !h.address,
         phone: h?.phone||'', address: h?.address||'', website: h?.website||'',
-        matched_name: h?.name||hotel
+        matched_name: displayName
       });
     }
   }
@@ -215,25 +383,34 @@ function parseSummary(wb, hotels){
   // activities map by date
   const activities=[];
   if(actStart>=0){
-    for(let i=actStart+1;i<sum.length;i++){
+    const actEnd=sectionEnd(actStart);
+    for(let i=actStart+1;i<actEnd;i++){
       const name=cell(sum[i],0); if(!name) continue;
-      if(/nett rate/i.test(name)) break;
+      if(/nett rate/i.test(name)||/^name$/i.test(name)) continue;
       activities.push({
-        name, place:cell(sum[i],2), when:cell(sum[i],3), res:cell(sum[i],4), notes:cell(sum[i],5)
+        name, place:cell(sum[i],2), when:cell(sum[i],3), res:cell(sum[i],4), notes:cell(sum[i],5),
+        dkey: dateKey(cell(sum[i],3))
       });
     }
   }
-  function actFor(datePrefix){
-    const d=norm(datePrefix).slice(0,5); // 13JUN
-    return activities.find(a=>norm(a.when).includes(norm(datePrefix).replace(/\s/g,'').slice(0,5))||norm(a.when).startsWith(d.replace(' ','')));
+  function findActivity(date, kind){
+    const dk=dateKey(date) || date.replace(/-/g,'');
+    let A=activities.find(a=>a.dkey && a.dkey===dk);
+    if(!A) A=activities.find(a=>dateKey(a.when)===dk);
+    if(!A) A=activities.find(a=>norm(a.when).replace(/\s/g,'').includes(dk));
+    if(!A && kind){
+      const tokens=norm(kind).split(' ').filter(t=>t.length>2 && !/TOUR|GUIDE|ESG|CSG|TRF/.test(t)).slice(0,3);
+      if(tokens.length) A=activities.find(a=>tokens.every(t=>norm(a.name).includes(t)));
+    }
+    return A||null;
   }
 
   // transfers / services from transport block
   const trf_rows=[];
   if(trStart>=0){
-    for(let i=trStart+1;i<sum.length;i++){
-      if(accStart>=0&&i>=accStart) break;
-      const kind=cell(sum[i],0); if(!kind||/^transport$/i.test(kind)) continue;
+    const trEnd=sectionEnd(trStart);
+    for(let i=trStart+1;i<trEnd;i++){
+      const kind=cell(sum[i],0); if(!kind||/^transport$/i.test(kind)||/^pick-?up/i.test(kind)) continue;
       const pickup=cell(sum[i],1), from=cell(sum[i],2), to=cell(sum[i],3), res=cell(sum[i],4), notes=cell(sum[i],5);
       const dp=parseDayMon(pickup);
       const time=parseTimeFrom(pickup);
@@ -243,7 +420,7 @@ function parseSummary(wb, hotels){
       const k=norm(kind);
       let label='', where_from='', where_to='', note='', missing=false;
 
-      const fmtHotel=(h,fallback)=>h?`${h.name}\n${h.address||''}`:(fallback||'');
+      const fmtHotel=(h,fallback)=>h?`${h.name}\n${shortenAddress(h.address||'')}`:(fallback||'');
       const flightNear=(dir)=>{
         // find flight matching date
         const day=date.replace('-','');
@@ -255,34 +432,27 @@ function parseSummary(wb, hotels){
 
       if(/^TRF/i.test(kind)&&/airport/i.test(from)&&!/airport/i.test(to)){
         label='TRANSFER FROM AIRPORT';
-        const fl=flights.find(f=>/HAN|DAD|SGN/i.test(f.to)&&norm(f.arr).includes(date.replace('-','').slice(0,5)))||flights.find(f=>norm(f.arr).includes(dp.raw.replace(/\s/g,'').slice(0,5)));
-        // better: match by place
-        let fl2=null;
-        if(/HAN/i.test(from)) fl2=flights.find(f=>/HAN/i.test(f.to));
-        else if(/SGN|SAI/i.test(from)) fl2=flights.find(f=>/SGN/i.test(f.to));
-        else if(/DAD/i.test(from)) fl2=flights.find(f=>/DAD/i.test(f.to));
-        const fll=fl2||fl;
-        const apt=/HAN/i.test(from)?'HANOI AIRPORT':/DAD/i.test(from)?'DAD AIRPORT':/SGN/i.test(from)?'SGN AIRPORT':from.toUpperCase();
-        where_from=`TIME: ${time||''}\n${apt}`+(fll?`\nFlight: ${fll.carrier}\nArrival: ${time||parseTimeFrom(fll.arr)}`:'');
+        const code=aptCode(from);
+        let fll=flights.find(f=>aptCode(f.to)===code && dateKey(f.arr)===dateKey(date||dp.raw));
+        if(!fll) fll=flights.find(f=>aptCode(f.to)===code);
+        const aptName=code==='HAN'?'HANOI AIRPORT':code==='DAD'?'DAD AIRPORT':code==='SGN'?'SGN AIRPORT':code==='PQC'?'PQC AIRPORT':(code?code+' AIRPORT':from.toUpperCase());
+        where_from=`TIME: ${time||''}\n${aptName}`+(fll?`\nFlight: ${fll.carrier}\nArrival: ${time||parseTimeFrom(fll.arr)}`:'');
         where_to=fmtHotel(toH, to);
-        const pillar=/HAN/i.test(from)?'pillar no.10':/SGN/i.test(from)?'pillar no. 23B':'the arrivals area';
-        const term=/HAN/i.test(from)?'international terminal (outside the arrivals hall at '+pillar+')':/SGN/i.test(from)?'domestic terminal of Sai Gon airport (outside the arrivals hall '+pillar+')':'the arrivals hall';
-        note=`The driver will pick you up at the ${term} with a sign:\n\n GO2/ MR. ${surname.toUpperCase()}`;
+        const pick=airportArrivalNote(code, fll, surname);
+        note=pick.note;
+        if(pick.unknown || !code){ missing=true; }
         if(!toH) missing=true;
       } else if(/^TRF/i.test(kind)&&/airport/i.test(to)){
-        label=/SGN/i.test(to)&&/19:30|DEP/i.test(pickup+kind)?'TRANSPORT TO\nAIRPORT':'TRANSFER TO AIRPORT';
-        if(/DAD/i.test(to)) label='TRANSFER TO AIRPORT';
+        const code=aptCode(to);
+        label=(code==='SGN' && /19:30|23:00/i.test(pickup+time))?'TRANSPORT TO\nAIRPORT':'TRANSFER TO AIRPORT';
         where_from=`TIME: ${time||''}\n`+fmtHotel(fromH, from);
-        let fl2=null;
-        if(/DAD/i.test(to)) fl2=flights.find(f=>/DAD/i.test(f.from));
-        else if(/SGN/i.test(to)) fl2=flights.find(f=>/SGN/i.test(f.from)&&/VN\s*031|VN031/i.test(f.carrier+f.from)||true);
-        // pick departure flight from that airport matching date
-        fl2=flights.find(f=>norm(f.from).includes(norm(to).replace(' AIRPORT','')) && norm(f.dep).includes(date.replace('-','').slice(0,5)))
-          ||flights.find(f=>norm(f.from).includes(norm(to).replace('AIRPORT','').trim()));
-        const apt=/DAD/i.test(to)?'DAD AIRPORT':/SGN/i.test(to)?'SGN AIRPORT':to.toUpperCase();
-        where_to=`${apt}`+(fl2?`\nFlight: ${fl2.carrier}\nDeparture: ${parseTimeFrom(fl2.dep)}`:'');
-        if(/DAD/i.test(to)) note='The driver will pick you up at the hotel reception and drop you off at the Domestic terminal of Da Nang airport.';
-        else note='The driver will pick you up at the hotel reception and drop you off at the International terminal of Saigon airport.';
+        let fl2=flights.find(f=>aptCode(f.from)===code && dateKey(f.dep)===dateKey(date||dp.raw));
+        if(!fl2) fl2=flights.find(f=>aptCode(f.from)===code);
+        const aptName=code==='DAD'?'DAD AIRPORT':code==='SGN'?'SGN AIRPORT':code==='PQC'?'PQC AIRPORT':code==='HAN'?'HANOI AIRPORT':(code?code+' AIRPORT':to.toUpperCase());
+        where_to=`${aptName}`+(fl2?`\nFlight: ${fl2.carrier}\nDeparture: ${parseTimeFrom(fl2.dep)}`:'');
+        const drop=airportDropoffNote(code, fl2);
+        note=drop.note;
+        if(drop.unknown || !code){ missing=true; }
         if(!fromH) missing=true;
       } else if(/^TRF/i.test(kind)&&/train/i.test(to)){
         label='TRANSFER TO TRAIN';
@@ -319,15 +489,11 @@ function parseSummary(wb, hotels){
         where_to=fmtHotel(toH, to);
         if(!fromH||!toH) missing=true;
       } else {
-        // tour / activity
-        const act=activities.find(a=>norm(a.when).includes(date.replace('-','')))||activities.find(a=>norm(kind).split(' ').slice(0,2).every(t=>norm(a.name).includes(t)));
-        // match by date
-        const act2=activities.find(a=>norm(a.when).replace(/\s/g,'').includes(date.replace('-','')));
-        const A=act2||act;
+        // tour / activity — match by date first, then name tokens
+        const A=findActivity(date||dp.raw, kind);
         const cz=/CZ|CSG|Czech/i.test(kind+(A?.notes||'')+(A?.name||''));
         label=kind.replace(/\s*\+\s*/g,'\n+');
         if(cz&&!/\+CZ/i.test(label)) label=label+'\n+CZ GUIDE';
-        // prettier labels from samples
         if(/HA NOI CITY|FOOD TOUR/i.test(kind)&&/HAN|HA NOI/i.test(from+to)) label='HAN CITY TOUR & FOOD TOUR\n+CZ GUIDE';
         if(/HA LONG/i.test(kind)) label='HALONG BAY';
         if(/NINH BINH TOUR/i.test(kind)) label='NINH BINH TOUR';
@@ -335,34 +501,35 @@ function parseSummary(wb, hotels){
         if(/HOI AN TOUR/i.test(kind)) label='HOI AN TOUR\n+CZ GUIDE';
         if(/FOOD TOUR BY MOTORBIKE/i.test(kind)) label='FOOD TOUR BY MOTORBIKE';
         if(/CU CHI/i.test(kind)) label='CU CHI TUNNEL TOUR\n+CZ GUIDE';
+        if(/CAT\s*TIEN|CATTIEN/i.test(kind)) label=label.includes('CAT')?label:'CAT TIEN TOUR';
+        if(/PHU\s*QUOC|\bPQ\b/i.test(kind)) label=label;
 
         where_from=`TIME: ${time||''}\n`+fmtHotel(fromH, from);
         where_to=fmtHotel(toH, to);
-        // build note from activity
         const an=A?.name||kind;
-        const notes=A?.notes||'';
-        let meals='No meals';
-        if(/Meal:\s*Street food/i.test(notes)) meals='Street food';
-        else if(/street food/i.test(notes) && !/Meal:/i.test(notes)) meals='street food';
-        else if(/street food/i.test(notes)) meals='Street food';
-        else if(/1 breakfast.*2 lunches.*1 dinner/i.test(notes)) meals='1 breakfast, 2 lunches, 1 dinner';
-        else if(/1\s*LUNCH/i.test(notes)) meals='1 lunch';
-        else if(/Meal:\s*no\b|no meals/i.test(notes)) meals='No meals';
-        const guideLang=/Czech|CSG|\bCZ\b/i.test(notes+kind+an)?'Czech speaking':/English|ESG/i.test(notes+an)?'English speaking':'';
+        const actNotes=A?.notes||'';
+        const mealBlob=[actNotes, notes, an, kind].join(' | ');
+        const meals=parseMeals(mealBlob);
+        const guideLang=/Czech|CSG|\bCZ\b/i.test(actNotes+kind+an)?'Czech speaking':/English|ESG/i.test(actNotes+an+kind)?'English speaking':'English speaking';
         let desc=an;
-        // humanize
         if(/HA NOI.*FOOD/i.test(an+kind)) desc='1 Day Hanoi walking tour & Food tour after which you return to the hotel.';
         else if(/HA LONG/i.test(an+kind)) desc='2 Days 1 night HaLong Bay sightseeing cruise, after which you transfer to Ninh Binh hotel.';
         else if(/NINH BINH/i.test(an+kind)) desc='1 Day Ninh Binh sightseeing tour, after which you return to the Ninh Binh hotel.';
         else if(/HUE/i.test(an+kind)) desc='½ Day Hue walking tour, after which you return to the Hue hotel.';
         else if(/HOI AN/i.test(an+kind)) desc='½ Day Hoi An walking tour, after which you return to the Hoi An hotel.';
-        else if(/MOTORBIKE|FOOD TOUR/i.test(an+kind)) desc='Sai Gon food tour by motorbike, after which you return to the Sai Gon hotel.';
+        else if(/MOTORBIKE|FOOD TOUR BY MOTOR/i.test(an+kind)) desc='Sai Gon food tour by motorbike, after which you return to the Sai Gon hotel.';
         else if(/CU CHI/i.test(an+kind)) desc='½ Day Cu Chi sightseeing on tour, after which you return to the Sai Gon hotel.';
+        else if(/CAT\s*TIEN|CATTIEN/i.test(an+kind)) desc='1 Day Cat Tien sightseeing tour, after which you return to the Cat Tien hotel.';
+        else if(/PHU\s*QUOC|\bPQ\b/i.test(an+kind)) desc='1 Day Phu Quoc sightseeing tour, after which you return to the Phu Quoc hotel.';
+        else {
+          // generic from activity name
+          desc=(an.replace(/,\s*(ESG|CSG)\s*$/i,'').trim()) + ', after which you return to the hotel.';
+        }
 
         if(/HA LONG/i.test(kind)){
           note=`${desc}\n-------------------------------------\nThe representative of the cruise will pick you up at the hotel reception.\n\nMeals on tour: ${meals}`;
         } else {
-          const pay=/food tour by motorbike/i.test(kind)?'pay for street food':'pay for all entry fees'+(/(FOOD|street food)/i.test(notes+kind)?' & foods':'');
+          const pay=/food tour by motorbike/i.test(kind)?'pay for street food':'pay for all entry fees'+(/(FOOD|street food)/i.test(actNotes+kind)?' & foods':'');
           note=`${desc}\n-------------------------------------\nThe ${guideLang} guide will pick you up at the hotel reception and ${pay}.\n\nMeals on tour: ${meals}`;
         }
         if(!fromH) missing=true;
@@ -402,6 +569,10 @@ function parseSummary(wb, hotels){
       if(/Flight:\s*$/m.test(where_to) || (/Flight:/i.test(where_to) && !/Flight:\s*\S/i.test(where_to))){ gaps.push('where_to'); missing=true; }
       if(!time && /TIME:\s*$/m.test(where_from)){ gaps.push('where_from'); missing=true; }
       if(!note) { gaps.push('note'); missing=true; }
+      if(/airport arrivals hall with a sign/i.test(note) || /drop you off at the airport\.$/i.test(note)){
+        gaps.push('note'); missing=true;
+        flags.push({level:'warn', msg:`Thiếu thông tin nhà ga/cổng đón cho "${(label||'').replace(/\n/g,' ')}" — điền ô Note (nội địa/quốc tế + pillar).`});
+      }
       trf_rows.push({label, date, where_from, where_to, note, missing, gaps, raw_kind:kind, time, summary_notes:sumNotes});
     }
   }
@@ -450,6 +621,34 @@ async function renderVoucherDoc(templateName, data){
     });
     // Justified guest lines create huge gaps between short words — force left align
     cleaned=cleaned.replace(/<w:jc\b[^>]*w:val="both"[^\/]*\/>/g, '<w:jc w:val="left"/>');
+    // Force Arial on every run so placeholders / loop rows / soft-breaks match sample
+    const RF='<w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:cs="Arial" w:eastAsia="Arial"/>';
+    cleaned=cleaned.replace(/<w:r\b([^>]*)>([\s\S]*?)<\/w:r>/g, (full, attrs, body)=>{
+      if(/<w:drawing[\s>]|<w:pict[\s>]|<w:object[\s>]/.test(body)) return full; // keep images
+      if(/<w:rPr[\s>]/.test(body)){
+        body=body.replace(/<w:rPr\b([^>]*)>([\s\S]*?)<\/w:rPr>/, (m,a,inner)=>{
+          if(/<w:rFonts\b/.test(inner))
+            inner=inner.replace(/<w:rFonts\b[^\/]*\/>|<w:rFonts\b[^>]*>[\s\S]*?<\/w:rFonts>/, RF);
+          else
+            inner=RF+inner;
+          return '<w:rPr'+a+'>'+inner+'</w:rPr>';
+        });
+      } else {
+        body='<w:rPr>'+RF+'<w:sz w:val="20"/><w:szCs w:val="20"/></w:rPr>'+body;
+      }
+      return '<w:r'+attrs+'>'+body+'</w:r>';
+    });
+    // Also normalize styles docDefaults if present in zip
+    try{
+      const styles=z.file('word/styles.xml') && z.file('word/styles.xml').asText();
+      if(styles){
+        let st=styles;
+        if(/<w:rFonts\b/.test(st)){
+          st=st.replace(/<w:rFonts\b[^\/]*\/>/g, RF);
+        }
+        z.file('word/styles.xml', st);
+      }
+    }catch(_e){}
     z.file('word/document.xml', cleaned);
     return z.generate({type:'blob',mimeType:'application/vnd.openxmlformats-officedocument.wordprocessingml.document',compression:'DEFLATE'});
   }catch(e){
@@ -509,7 +708,7 @@ async function serperHotelLookup(query, city){
       id:'serper-'+Date.now(),
       aliases:[query, best.title].filter(Boolean),
       name:String(best.title||query).trim(),
-      address:String(best.address||'').trim(),
+      address:shortenAddress(String(best.address||'').trim()),
       phone:String(best.phoneNumber||best.phone||'').trim(),
       website:String(best.website||'').trim(),
       source:'serper'
@@ -545,7 +744,7 @@ async function geminiHotelLookup(query){
     const obj=JSON.parse(m[0]);
     if(!obj.name && !obj.address) return null;
     return {id:'auto-'+Date.now(), aliases:[query, obj.name].filter(Boolean),
-      name:String(obj.name||query).trim(), address:String(obj.address||'').trim(),
+      name:String(obj.name||query).trim(), address:shortenAddress(String(obj.address||'').trim()),
       phone:String(obj.phone||'').trim(), website:String(obj.website||'').trim(),
       source: useSearch?'gemini-search':'gemini'};
   }
@@ -601,7 +800,7 @@ async function tavilyHotelLookup(query, city){
         return {ok:false, reason:'low_score'};
       }
     }
-    const hotel={id:'tavily-'+Date.now(), aliases:[query], name, address, phone: (phone||'').trim(), website, source:'tavily'};
+    const hotel={id:'tavily-'+Date.now(), aliases:[query], name, address:shortenAddress(address), phone: (phone||'').trim(), website, source:'tavily'};
     return {ok:true, hotel};
   }catch(e){
     console.warn('Tavily lookup failed', e);
@@ -668,5 +867,5 @@ async function enrichMissingHotels(data, hotels){
   return data;
 }
 
-global.Voucher={parseSummary,loadHotels,saveHotelExtra,matchHotel,hotelBlock,todayVN,norm,renderVoucherDoc,mergeHotels,geminiHotelLookup,serperHotelLookup,tavilyHotelLookup,resolveHotelContact,enrichMissingHotels,hotelCacheGet};
+global.Voucher={parseSummary,loadHotels,saveHotelExtra,matchHotel,hotelBlock,todayVN,norm,renderVoucherDoc,mergeHotels,geminiHotelLookup,serperHotelLookup,tavilyHotelLookup,resolveHotelContact,enrichMissingHotels,hotelCacheGet,shortenAddress,canonicalCity,parseMeals,aptCode,dateKey};
 })(window);
