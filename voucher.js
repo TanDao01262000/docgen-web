@@ -28,11 +28,12 @@ function fmtFlight(a){
 function looksLikeProseAddress(addr){
   const s=String(addr||'').trim();
   if(!s) return true;
-  if(s.length>120) return true;
+  // Full Google Maps addresses can be long — only reject obvious prose sentences
   if(/can be contacted|is located|please contact|the resort is|hotel is|\b(our|we|you)\b/i.test(s)) return true;
   if(/https?:\/\//i.test(s)) return true;
-  // Prefer addresses with a digit or clear place token
-  if(!/\d/.test(s) && !/(street|st\b|road|rd\b|ave|district|ward|ap\b|hamlet|island|phu quoc|sai gon|hanoi|danang|da nang)/i.test(s)) return true;
+  // Multi-sentence / paragraph dumps
+  if((s.match(/[.!?]/g)||[]).length>=2 && s.length>80) return true;
+  if(s.length>220) return true;
   return false;
 }
 function shortenAddress(addr){
@@ -194,11 +195,23 @@ function findRow(mat, pred, start=0){
 }
 function cell(row,i){return String((row&&row[i])||'').trim();}
 
-function loadHotels(){
-  return fetch('hotels.json').then(r=>r.json()).then(base=>{
-    let extra=[]; try{extra=JSON.parse(localStorage.hotelDir||'[]')}catch(e){}
-    return mergeHotels(base, extra);
-  });
+async function loadHotels(){
+  const base=await fetch('hotels.json').then(r=>r.json());
+  let extra=[]; try{extra=JSON.parse(localStorage.hotelDir||'[]')}catch(e){}
+  let merged=mergeHotels(base, extra);
+  // Supabase overrides win over hotels.json + localStorage
+  try{
+    const overs=await loadSupabaseOverrides(false);
+    if(overs && overs.length){
+      const mapped=overs.map(h=>({
+        id:h.id, aliases:h.aliases||[], name:h.name,
+        address:h.address||'', phone:h.phone||'', website:h.website||'',
+        source:'supabase', learned:true
+      }));
+      merged=mergeHotels(merged, mapped);
+    }
+  }catch(e){ console.warn('Supabase overrides skip', e); }
+  return merged;
 }
 function mergeHotels(a,b){
   const out=a.map(x=>({...x}));
@@ -237,7 +250,8 @@ function matchHotel(hotels, name){
 function hotelBlock(h){
   if(!h) return '';
   const lines=[h.name];
-  const addr=shortenAddress(h.address||'');
+  // Full Google / learned address verbatim (do not shorten)
+  const addr=String(h.address||'').replace(/\s+/g,' ').trim();
   if(addr) lines.push(addr);
   if(h.phone) lines.push((/telefon/i.test(h.phone)?'':'Tel: ')+h.phone.replace(/^Tel(efon)?\s*:\s*/i,''));
   if(h.website) lines.push('Web: '+h.website);
@@ -466,8 +480,14 @@ function parseSummary(wb, hotels){
         note, room, reservation:res,
         missing: !h || !h.address,
         phone: h?.phone||'', address: h?.address||'', website: h?.website||'',
-        matched_name: displayName
+        matched_name: displayName,
+        hotel_id: h?.id||'',
+        source: h?.source||(h?'hotels.json':''),
+        learned: !!(h && (h.learned||h.source==='supabase'))
       });
+      if(h && (h.learned||h.source==='supabase')){
+        flags.push({level:'info', msg:'đã học / learned: '+displayName});
+      }
     }
   }
 
@@ -768,47 +788,78 @@ async function serperHotelLookup(query, city){
   const key=cfg.SERPER_API_KEY||'';
   if(!key) return {ok:false, reason:'no_key'};
   const q=[query, city, 'Vietnam'].filter(Boolean).join(' ').replace(/\s+/g,' ').trim();
-  try{
-    const r=await fetch('https://google.serper.dev/places',{
+  function scorePlace(p){
+    const nq=norm(query), nt=norm(p.title||'');
+    let s=0;
+    if(nt===nq) s=100;
+    else if(nq && (nt.includes(nq)||nq.includes(nt))) s=80;
+    else {
+      const at=new Set(nq.split(' ').filter(t=>t.length>2));
+      s=[...at].filter(t=>nt.includes(t)).length*20;
+    }
+    const brand=nq.split(' ').filter(t=>t.length>3 && !/^(HOTEL|RESORT|BOUTIQUE|SPA|THE|AND|LODGE|SUITES?)$/.test(t));
+    if(brand.length && brand.filter(t=>nt.includes(t)).length>=Math.max(1, brand.length-1)) s=Math.max(s,55);
+    const nc=norm(city||'');
+    const addrBlob=norm((p.address||'')+' '+(p.title||''));
+    if(nc){
+      const ctoks=nc.split(' ').filter(t=>t.length>2);
+      const hit=ctoks.filter(t=>addrBlob.includes(t)).length;
+      if(hit) s+=15*hit;
+      else if(ctoks.length && !ctoks.some(t=>addrBlob.includes(t))) s-=25;
+    }
+    return s;
+  }
+  async function fetchPlaces(path){
+    const r=await fetch('https://google.serper.dev/'+path,{
       method:'POST',
       headers:{'X-API-KEY':key,'Content-Type':'application/json'},
       body:JSON.stringify({q, gl:'vn', hl:'en'})
     });
-    if(r.status===402||r.status===403||r.status===429) return {ok:false, reason:'quota', status:r.status};
-    if(!r.ok) return {ok:false, reason:'http', status:r.status};
+    if(r.status===402||r.status===403||r.status===429){ const e=new Error('quota'); e.reason='quota'; e.status=r.status; throw e; }
+    if(!r.ok){ const e=new Error('http'); e.reason='http'; e.status=r.status; throw e; }
     const data=await r.json();
-    const places=data.places||[];
-    if(!places.length) return {ok:false, reason:'empty'};
-    // pick best fuzzy match
-    let best=places[0], score=0;
-    const nq=norm(query);
+    return data.places||[];
+  }
+  try{
+    let places=[], src='places';
+    try{ places=await fetchPlaces('places'); }
+    catch(e){ if(e.reason==='quota'||e.reason==='http') return {ok:false, reason:e.reason, status:e.status}; throw e; }
+    let best=null, score=-999;
     for(const p of places){
-      const nt=norm(p.title||'');
-      let s=0;
-      if(nt===nq) s=100;
-      else if(nt.includes(nq)||nq.includes(nt)) s=80;
-      else {
-        const at=new Set(nq.split(' ').filter(t=>t.length>2));
-        s=[...at].filter(t=>nt.includes(t)).length*20;
-      }
-      if(s>score){score=s; best=p;}
+      const s=scorePlace(p);
+      if(s>score){ score=s; best=p; }
     }
-    // Reject weak / unrelated Places hits (e.g. garbage query matching random hotel)
-    if(score < 40) return {ok:false, reason:'low_score', score};
+    // Prefer a hit that actually has address/phone; else try maps
+    if(!best || score<40 || !(best.address||best.phoneNumber||best.phone)){
+      try{
+        const maps=await fetchPlaces('maps');
+        for(const p of maps){
+          const s=scorePlace(p);
+          if(s>score || (s>=40 && (p.address||p.phoneNumber) && !(best&&best.address))){
+            if(s>=40){ score=Math.max(s,score); best=p; src='maps'; }
+          }
+        }
+      }catch(e){
+        if(e.reason==='quota') return {ok:false, reason:'quota', status:e.status};
+      }
+    }
+    if(!best || score<40) return {ok:false, reason:'low_score', score};
+    const address=String(best.address||'').trim(); // verbatim — do NOT shorten
+    const phone=String(best.phoneNumber||best.phone||'').trim();
+    if(!address && !phone) return {ok:false, reason:'empty'};
     const hotel={
       id:'serper-'+Date.now(),
       aliases:[query, best.title].filter(Boolean),
       name:String(best.title||query).trim(),
-      address:shortenAddress(String(best.address||'').trim()),
-      phone:String(best.phoneNumber||best.phone||'').trim(),
+      address,
+      phone,
       website:String(best.website||'').trim(),
-      source:'serper'
+      source:'serper',
+      serper_path:src
     };
-    if(!hotel.address && !hotel.phone) return {ok:false, reason:'empty'};
     return {ok:true, hotel, score};
   }catch(e){
     console.warn('Serper lookup failed', e);
-    // network/CORS -> treat as fail, may fall back
     return {ok:false, reason:'network', error:String(e)};
   }
 }
@@ -835,7 +886,7 @@ async function geminiHotelLookup(query){
     const obj=JSON.parse(m[0]);
     if(!obj.name && !obj.address) return null;
     return {id:'auto-'+Date.now(), aliases:[query, obj.name].filter(Boolean),
-      name:String(obj.name||query).trim(), address:shortenAddress(String(obj.address||'').trim()),
+      name:String(obj.name||query).trim(), address:String(obj.address||'').trim(),
       phone:String(obj.phone||'').trim(), website:String(obj.website||'').trim(),
       source: useSearch?'gemini-search':'gemini'};
   }
@@ -891,7 +942,7 @@ async function tavilyHotelLookup(query, city){
         return {ok:false, reason:'low_score'};
       }
     }
-    const hotel={id:'tavily-'+Date.now(), aliases:[query], name, address:shortenAddress(address), phone: (phone||'').trim(), website, source:'tavily'};
+    const hotel={id:'tavily-'+Date.now(), aliases:[query], name, address:String(address||'').trim(), phone: (phone||'').trim(), website, source:'tavily'};
     return {ok:true, hotel};
   }catch(e){
     console.warn('Tavily lookup failed', e);
@@ -905,17 +956,132 @@ function sanitizeHotelCandidate(h){
   if(looksLikeProseAddress(addr)){
     return {...h, address:'', _bad_address:true};
   }
-  return {...h, address:shortenAddress(addr)};
+  // Keep full Google / override address verbatim (shortenAddress disabled for lookups)
+  return {...h, address:addr};
 }
+
+/* ---- Supabase learning (hotel_overrides + corrections_log) ---- */
+function supabaseCfg(){
+  const c=window.DOCGEN_CONFIG||{};
+  return {url:String(c.SUPABASE_URL||'').replace(/\/$/,''), key:String(c.SUPABASE_ANON_KEY||'')};
+}
+function supabaseEnabled(){ const c=supabaseCfg(); return !!(c.url && c.key); }
+async function supabaseFetch(path, opts){
+  const c=supabaseCfg();
+  if(!c.url||!c.key) return null;
+  const headers=Object.assign({
+    'apikey':c.key,
+    'Authorization':'Bearer '+c.key,
+    'Content-Type':'application/json'
+  }, (opts&&opts.headers)||{});
+  try{
+    const r=await fetch(c.url+'/rest/v1/'+path, Object.assign({}, opts||{}, {headers}));
+    if(!r.ok){
+      const t=await r.text().catch(()=>'');
+      console.warn('Supabase HTTP', r.status, t.slice(0,200));
+      return {ok:false, status:r.status, body:t};
+    }
+    if(r.status===204) return {ok:true, data:null};
+    const data=await r.json().catch(()=>null);
+    return {ok:true, data};
+  }catch(e){
+    console.warn('Supabase unreachable', e);
+    return null; // degrade gracefully
+  }
+}
+let _sbOverridesCache=null, _sbOverridesAt=0;
+async function loadSupabaseOverrides(force){
+  if(!supabaseEnabled()) return [];
+  if(!force && _sbOverridesCache && (Date.now()-_sbOverridesAt)<60000) return _sbOverridesCache;
+  const res=await supabaseFetch('hotel_overrides?select=*&order=updated_at.desc');
+  if(!res||!res.ok) return _sbOverridesCache||[];
+  _sbOverridesCache=Array.isArray(res.data)?res.data:[];
+  _sbOverridesAt=Date.now();
+  return _sbOverridesCache;
+}
+function matchOverride(list, query){
+  if(!list||!list.length) return null;
+  const n=norm(query); if(!n) return null;
+  let best=null, score=0;
+  for(const h of list){
+    const keys=[h.name,...(h.aliases||[])].map(norm);
+    for(const k of keys){
+      if(!k) continue;
+      let s=0;
+      if(k===n) s=100;
+      else if(n.includes(k)||k.includes(n)) s=80;
+      else {
+        const at=new Set(k.split(' ')), bt=n.split(' ');
+        s=bt.filter(t=>at.has(t)&&t.length>2).length*15;
+      }
+      if(s>score){score=s; best=h;}
+    }
+  }
+  if(score<50||!best) return null;
+  return {
+    id:best.id, aliases:best.aliases||[], name:best.name,
+    address:best.address||'', phone:best.phone||'', website:best.website||'',
+    source:'supabase', learned:true, updated_at:best.updated_at
+  };
+}
+async function supabaseUpsertOverride(h){
+  if(!supabaseEnabled()||!h||!h.name) return {ok:false, reason:'disabled'};
+  const id=h.id || ('wife-'+norm(h.name).toLowerCase().replace(/\s+/g,'-').slice(0,48));
+  const row={
+    id, aliases: h.aliases||[h.name], name:h.name,
+    address:h.address||'', phone:h.phone||'', website:h.website||'',
+    source: h.source==='wife'||h.source==='supabase'?'wife':(h.source||'wife'),
+    updated_at: new Date().toISOString()
+  };
+  const res=await supabaseFetch('hotel_overrides?on_conflict=id',{
+    method:'POST',
+    headers:{'Prefer':'resolution=merge-duplicates,return=representation'},
+    body:JSON.stringify(row)
+  });
+  if(res&&res.ok){
+    _sbOverridesCache=null;
+    return {ok:true, hotel:{...row, learned:true, source:'supabase'}};
+  }
+  return {ok:false, reason:'upsert_failed', res};
+}
+async function supabaseLogCorrection(entry){
+  if(!supabaseEnabled()) return;
+  // Prefer not to store guest names — only if explicitly provided
+  const row={
+    hotel_id: entry.hotel_id||null,
+    hotel_name: entry.hotel_name||null,
+    field: entry.field||'hotel_block',
+    old_value: entry.old_value||null,
+    new_value: entry.new_value||null,
+    guest_names: entry.guest_names||null,
+    note: entry.note||null
+  };
+  await supabaseFetch('corrections_log',{method:'POST', headers:{'Prefer':'return=minimal'}, body:JSON.stringify(row)});
+}
+
 async function resolveHotelContact(query, city){
-  // 1) local cache
+  // Order: Supabase overrides > hotels.json (caller) > localStorage cache > Serper > Tavily > Gemini
+  // 0) Supabase learned overrides (wife edits win)
+  try{
+    const overs=await loadSupabaseOverrides(false);
+    const ov=matchOverride(overs, query) || (city?matchOverride(overs, city+' '+query):null);
+    if(ov && (ov.address||ov.phone)){
+      const h=sanitizeHotelCandidate({...ov});
+      if(h && (h.address||h.phone)) return {...h, learned:true, source:'supabase'};
+    }
+  }catch(e){ console.warn('Supabase override lookup failed', e); }
+
+  // 1) local cache (may include prior wife saves)
   const cached=cacheLookup(query) || (city?cacheLookup(city+' '+query):null);
   if(cached && (cached.address||cached.phone)){
     const h=sanitizeHotelCandidate({...cached, from_cache:true});
-    if(h && (h.address||h.phone)) return h;
+    if(h && (h.address||h.phone)){
+      if(cached.source==='supabase'||cached.learned) h.learned=true;
+      return h;
+    }
   }
 
-  // 2) Serper (1 call)
+  // 2) Serper places/maps (exact Google address/phone, never shortened)
   const s=await serperHotelLookup(query, city);
   if(s.ok){
     const h=sanitizeHotelCandidate(s.hotel);
@@ -935,8 +1101,7 @@ async function resolveHotelContact(query, city){
       return h;
     }
   }
-  // 4) Gemini last resort — only when search APIs failed (quota/network/auth),
-  // not when they returned unrelated/empty hits for a garbage name.
+  // 4) Gemini last resort — AI warning shown by caller
   const searchMiss = (s.reason==='low_score'||s.reason==='empty') && (tv.reason==='low_score'||tv.reason==='empty'||tv.reason==='no_key');
   if(searchMiss) return null;
   const g=sanitizeHotelCandidate(await geminiHotelLookup([query, city, 'Vietnam'].filter(Boolean).join(' ')));
@@ -960,10 +1125,13 @@ async function enrichMissingHotels(data, hotels){
       r.address=found.address; r.phone=found.phone; r.website=found.website;
       r.matched_name=found.name; r.missing=false;
       r.source=found.source||'unknown';
+      r.learned=!!(found.learned||found.source==='supabase');
       r.auto_lookup=true;
       // Clear the earlier "missing address" warning for this hotel
       data.flags=(data.flags||[]).filter(f=>!(f.level==='warn' && /Chưa có địa chỉ|No hotel address/i.test(f.msg||'') && norm(f.msg).includes(norm(q).slice(0,12))));
-      if(found.source==='serper'){
+      if(found.learned||found.source==='supabase'){
+        data.flags.push({level:'info', msg:'đã học / learned: '+found.name});
+      } else if(found.source==='serper'){
         data.flags.push({level:'info', msg:'Từ tìm kiếm Google (Serper): '+found.name+(found.from_cache?' (cache)':'')});
       } else if(found.source==='tavily'){
         data.flags.push({level:'info', msg:'Từ tìm kiếm web (Tavily): '+found.name});
@@ -1090,5 +1258,5 @@ function parseSummaryFromPdfText(text, hotels){
   return parseSummary(wb, hotels);
 }
 
-global.Voucher={parseSummary,parseSummaryFromPdfText,loadHotels,saveHotelExtra,matchHotel,hotelBlock,todayVN,norm,renderVoucherDoc,mergeHotels,geminiHotelLookup,serperHotelLookup,tavilyHotelLookup,resolveHotelContact,enrichMissingHotels,hotelCacheGet,shortenAddress,canonicalCity,parseMeals,aptCode,dateKey,parseGuestsFromClients,parseGuestsFromGt,formatGuestLine};
+global.Voucher={parseSummary,parseSummaryFromPdfText,loadHotels,saveHotelExtra,matchHotel,hotelBlock,todayVN,norm,renderVoucherDoc,mergeHotels,geminiHotelLookup,serperHotelLookup,tavilyHotelLookup,resolveHotelContact,enrichMissingHotels,hotelCacheGet,shortenAddress,canonicalCity,parseMeals,aptCode,dateKey,parseGuestsFromClients,parseGuestsFromGt,formatGuestLine,loadSupabaseOverrides,supabaseUpsertOverride,supabaseLogCorrection,supabaseEnabled,matchOverride};
 })(window);

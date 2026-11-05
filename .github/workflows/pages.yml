@@ -23,6 +23,8 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           SERPER_API_KEY: ${{ secrets.SERPER_API_KEY }}
           TAVILY_API_KEY: ${{ secrets.TAVILY_API_KEY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
         run: |
           python3 - <<'PY'
           import os
@@ -30,16 +32,20 @@ jobs:
           g = os.environ.get("GEMINI_API_KEY") or ""
           s = os.environ.get("SERPER_API_KEY") or ""
           t = os.environ.get("TAVILY_API_KEY") or ""
+          su = os.environ.get("SUPABASE_URL") or ""
+          sk = os.environ.get("SUPABASE_ANON_KEY") or ""
           Path("config.js").write_text(
               "window.DOCGEN_CONFIG=Object.assign(window.DOCGEN_CONFIG||{},{\n"
               f"  GEMINI_API_KEY: {g!r},\n"
               f"  SERPER_API_KEY: {s!r},\n"
               f"  TAVILY_API_KEY: {t!r},\n"
+              f"  SUPABASE_URL: {su!r},\n"
+              f"  SUPABASE_ANON_KEY: {sk!r},\n"
               "  GEMINI_MODEL: 'gemini-3.5-flash-lite'\n"
               "});\n",
               encoding="utf-8",
           )
-          print("config.js written; gemini_len=", len(g), "serper_len=", len(s), "tavily_len=", len(t))
+          print("config.js written; gemini_len=", len(g), "serper_len=", len(s), "tavily_len=", len(t), "supabase_url_len=", len(su), "supabase_key_len=", len(sk))
           PY
       - name: Setup Pages
         uses: actions/configure-pages@v5

@@ -5,68 +5,74 @@
       "ORIENTAL SUITE",
       "ORIENTAL SUITES",
       "ORIENTAL SUITES HOTEL & SPA",
-      "ORIENTAL SUITES HOTEL"
+      "ORIENTAL SUITES HOTEL",
+      "Oriental Suites Hotel & Spa"
     ],
     "name": "ORIENTAL SUITES HOTEL & SPA",
-    "address": "58 Hang Dao, Hoan Kiem, Hanoi",
-    "phone": "024. 3557.3333",
-    "website": ""
+    "address": "58 P. Hàng Đào, Str, Hoàn Kiếm, Hà Nội 111000",
+    "phone": "024 3928 6666",
+    "website": "http://www.orientalsuiteshotel.com/"
   },
   {
     "id": "aspira-cruise",
     "aliases": [
       "ASPIRA CRUISE",
-      "ASPIRA"
+      "ASPIRA",
+      "Aspira Cruises Ha Long"
     ],
     "name": "ASPIRA CRUISE",
-    "address": "36 Tuan Chau, Ha Long city, Quang Ninh",
+    "address": "38 Hạ Long, Tuần Châu, Quảng Ninh 200000",
     "phone": "0944 319 866",
-    "website": ""
+    "website": "https://www.booking.com/hotel/vn/aspira-cruises.html?aid=7955654"
   },
   {
     "id": "tam-coc-wonderland",
     "aliases": [
       "TAM COC WONDERLAND",
-      "TAM COC"
+      "TAM COC",
+      "Tam Coc Wonderland Lodge"
     ],
     "name": "TAM COC WONDERLAND",
-    "address": "Khu Hang Ðùng, Ninh Hai, Hoa Lu District, Ninh Binh, Vietnam",
-    "phone": "0986 717 4168 735 888",
+    "address": "6WFP JX9, Nam Hoa Lư, Ninh Bình",
+    "phone": "0942 987 801",
     "website": ""
   },
   {
     "id": "cherish-hue",
     "aliases": [
       "CHERISH HUE",
-      "CHERISH HUE HOTEL"
+      "CHERISH HUE HOTEL",
+      "Cherish hotel"
     ],
     "name": "CHERISH HUE HOTEL",
-    "address": "57 - 59 Ben Nghe - TP.Hue -VietNam",
-    "phone": "(84-234) 3943943",
-    "website": ""
+    "address": "59 Bến Nghé, Thuận Hóa, Huế",
+    "phone": "0234 3943 943",
+    "website": "https://www.booking.com/hotel/vn/camellia-hue-47000.vi.html?aid=7955654"
   },
   {
     "id": "hoi-an-beach-resort",
     "aliases": [
       "HOI AN BEACH RESORT",
-      "HOI AN BEACH"
+      "HOI AN BEACH",
+      "Hoi An Beach Resort"
     ],
     "name": "HOI AN BEACH RESORT",
-    "address": "1 Cua Dai, Hoi An, Quang Nam",
+    "address": "01 Cửa Đại, Hội An Đông, Đà Nẵng, Vietnam",
     "phone": "+84 235 3927 011",
-    "website": ""
+    "website": "http://www.hoianbeachresort.com.vn/"
   },
   {
     "id": "the-odys",
     "aliases": [
       "THE ODYS",
       "THE ODYS BOUTIQUE HOTEL",
-      "ODYS"
+      "ODYS",
+      "The Odys Boutique Hotel"
     ],
     "name": "THE ODYS BOUTIQUE HOTEL",
-    "address": "65-67-69 Nguyen Thai Binh St, District 1, HCMC",
-    "phone": "028 3821 6915",
-    "website": "https://theodyshotel.com/"
+    "address": "Nguyễn Thái Bình, Bến Thành, Hồ Chí Minh 70000, Vietnam",
+    "phone": "+84 28 3821 6915",
+    "website": "http://theodyshotel.com/"
   },
   {
     "id": "lotus-train",
@@ -88,9 +94,9 @@
       "Cát Tiên Jungle Lodge"
     ],
     "name": "CAT TIEN JUNGLE LODGE",
-    "address": "Nam Cat Tien, Tan Phu, Dong Nai",
-    "phone": "",
-    "website": ""
+    "address": "Số 854 ấp 1, Nam Cát Tiên, Đồng Nai",
+    "phone": "0251 3664 888",
+    "website": "https://cattienjunglelodge.com/"
   },
   {
     "id": "salinda-pq",
@@ -98,36 +104,39 @@
       "Salinda Resort Phu Quoc",
       "SALINDA RESORT",
       "Salinda Phu Quoc",
-      "Salinda Resort"
+      "Salinda Resort",
+      "Salinda Resort Phu Quoc Island"
     ],
     "name": "SALINDA RESORT PHU QUOC",
-    "address": "Bai Dai, Ganh Dau, Phu Quoc",
+    "address": "Cua Lap Hamlet, Duong To Commune, Phu Quoc Island",
     "phone": "",
-    "website": ""
+    "website": "http://www.salindaresort.com/"
   },
   {
     "id": "lalita-boutique",
     "aliases": [
       "LALITA BOUTIQUE",
       "LALITA BOUTIQUE HOTEL",
-      "LALITA"
+      "LALITA",
+      "Lalita Boutique Hotel & Spa Ninh Binh"
     ],
     "name": "LALITA BOUTIQUE HOTEL",
-    "address": "Ninh Hai, Hoa Lu, Ninh Binh",
-    "phone": "",
-    "website": ""
+    "address": "Nam Hoa Lư, Ninh Bình",
+    "phone": "0229 3844 888",
+    "website": "https://lalitahotel.com/"
   },
   {
     "id": "chicland-danang",
     "aliases": [
       "CHICLAND HOTEL",
       "CHICLAND",
-      "CHIC LAND"
+      "CHIC LAND",
+      "Chicland Danang Beach Hotel"
     ],
     "name": "CHICLAND HOTEL",
-    "address": "4 Bach Dang, Hai Chau, Da Nang",
-    "phone": "",
-    "website": ""
+    "address": "210 Võ Nguyên Giáp, An Hải, Đà Nẵng 550000",
+    "phone": "0236 2232 222",
+    "website": "https://www.chiclandhotel.com/"
   },
   {
     "id": "green-bamboo-cat-tien",
@@ -136,11 +145,12 @@
       "GREEN BAMBOO LODGE",
       "GREEN BAMBOO LODGE RESORT",
       "Green Bamboo Lodge",
-      "Green Bamboo"
+      "Green Bamboo",
+      "Green Bamboo Restaurants"
     ],
     "name": "GREEN BAMBOO LODGE RESORT",
-    "address": "Ap 1, Nam Cat Tien, Tan Phu, Dong Nai",
-    "phone": "0824 402 345",
+    "address": "ấp 1, Nam Cat Tien, Dong Nai City, Vietnam",
+    "phone": "+84 824 402 345",
     "website": ""
   },
   {
@@ -154,8 +164,8 @@
       "Sea Sense Resort"
     ],
     "name": "SEA SENSE RESORT PHU QUOC",
-    "address": "Ap Ong Lang, Cua Duong, Phu Quoc, Kien Giang",
-    "phone": "+84 297 730 9899",
-    "website": "https://seasenseresort.vn/"
+    "address": "7W6J+WF, Tổ 3, Ông Lang, Phú Quốc, An Giang, Vietnam",
+    "phone": "+84 297 7309 899",
+    "website": "http://seasenseresort.vn/"
   }
 ]
