@@ -259,7 +259,39 @@ async function vGen(){
     VDATA.update_date=v_update.value; VDATA.pax=v_pax.value; VDATA.contact=v_contact.value;
     VDATA.guests=v_guests.value.split('\n').map(s=>s.trim()).filter(Boolean);
     VDATA.guest_lines=VDATA.guests.join('\n');
-    VDATA.acc_rows=VDATA.acc_rows.map(r=>({...r, is_hotel:!!r.is_hotel, is_train:!!r.is_train}));
+    VDATA.acc_rows=VDATA.acc_rows.map((r,i,arr)=>{
+      const is_train=!!r.is_train;
+      const is_hotel=!!r.is_hotel && !is_train;
+      const prevTrain=i>0 && !!arr[i-1].is_train;
+      return {...r, is_train, is_hotel, show_header: is_hotel && !prevTrain};
+    });
+    // Flatten to one table-row per entry for docxtemplater (header/data/train)
+    VDATA.acc_print_rows=[];
+    for(const r of VDATA.acc_rows){
+      if(r.is_train){
+        VDATA.acc_print_rows.push({is_hdr:false, is_data:false, is_train:true, train_text:r.train_text||''});
+      } else if(r.is_hotel){
+        if(r.show_header){
+          VDATA.acc_print_rows.push({is_hdr:true, is_data:false, is_train:false});
+        }
+        VDATA.acc_print_rows.push({
+          is_hdr:false, is_data:true, is_train:false,
+          city:r.city||'', check_in:r.check_in||'', check_out:r.check_out||'',
+          hotel_block:r.hotel_block||'', note:r.note||''
+        });
+      }
+    }
+    VDATA.trf_print_rows=[];
+    for(const r of (VDATA.trf_rows||[])){
+      VDATA.trf_print_rows.push({is_hdr:true, is_data:false});
+      VDATA.trf_print_rows.push({
+        is_hdr:false, is_data:true,
+        label:r.label||'', date:r.date||'', where_from:r.where_from||'',
+        where_to:r.where_to||'', note:r.note||''
+      });
+    }
+    if(!VDATA.payment) VDATA.payment='ALL FULLY PREPAID BY CK GO2';
+    if(!VDATA.meal) VDATA.meal='Breakfast';
     persistVoucher();
     vinfo.textContent=(LANG==='vi'?'Đang tạo file Word...':'Generating Word files...');
     const a=await Voucher.renderVoucherDoc('voucher_accommodation.docx', VDATA);

@@ -174,7 +174,7 @@ function parseSummary(wb, hotels){
         if(/lotus/i.test(hotel)||/night train/i.test(city))
           train_text=`${cinP.dayMon||'16-JUN'} - ${coutP.dayMon||'17-JUN'} LOTUS TRAIN FROM NINH BINH TO HUE (private coupe)\n${trainNo}: ${depT||'??'} – ${arrT||'??'}`;
         if(!depT||!arrT) train_text=train_text.replace('?? – ??','').replace(/: – /,'');
-        acc_rows.push({is_train:true, is_hotel:true, train_text, city:train_text, check_in:'', check_out:'', hotel_block:'', note:'', missing:!depT||!arrT, hotel, auto_lookup:false});
+        acc_rows.push({is_train:true, is_hotel:false, train_text, city:train_text, check_in:'', check_out:'', hotel_block:'', note:'', missing:!depT||!arrT, hotel, auto_lookup:false});
         continue;
       }
       const cinP=parseDayMon(cin), coutP=parseDayMon(cout);
@@ -387,10 +387,24 @@ async function renderVoucherDoc(templateName, data){
   const buf=await (await fetch('templates/'+templateName)).arrayBuffer();
   const zip=new PizZip(buf);
   const doc=new docxtemplater(zip,{paragraphLoop:true,linebreaks:true,delimiters:{start:'{',end:'}'},nullGetter:()=>''});
-  // NOTE: templates use single braces {field} built by python; but our app examples use {{}}.
-  // We built templates with {single} delimiters intentionally for vouchers.
   doc.render(data);
-  return doc.getZip().generate({type:'blob',mimeType:'application/vnd.openxmlformats-officedocument.wordprocessingml.document',compression:'DEFLATE'});
+  // Docxtemplater leaves empty conditional table rows (false is_hdr/is_data/is_train). Strip them.
+  try{
+    const z=doc.getZip();
+    const xml=z.file('word/document.xml').asText();
+    let cleaned=xml.replace(/<w:tr\b[\s\S]*?<\/w:tr>/g, (row)=>{
+      const texts=[...row.matchAll(/<w:t[^>]*>([\s\S]*?)<\/w:t>/g)].map(m=>m[1]).join('');
+      const visible=texts.replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&quot;/g,'"').replace(/&#0?39;/g,"'").trim();
+      return visible ? row : '';
+    });
+    // Justified guest lines create huge gaps between short words — force left align
+    cleaned=cleaned.replace(/<w:jc\b[^>]*w:val="both"[^\/]*\/>/g, '<w:jc w:val="left"/>');
+    z.file('word/document.xml', cleaned);
+    return z.generate({type:'blob',mimeType:'application/vnd.openxmlformats-officedocument.wordprocessingml.document',compression:'DEFLATE'});
+  }catch(e){
+    console.warn('row cleanup failed', e);
+    return doc.getZip().generate({type:'blob',mimeType:'application/vnd.openxmlformats-officedocument.wordprocessingml.document',compression:'DEFLATE'});
+  }
 }
 
 
@@ -520,10 +534,22 @@ async function tavilyHotelLookup(query, city){
     }
     const name=query;
     if(!address && !phone) return {ok:false, reason:'empty'};
-    // Require at least one meaningful query token to appear in the result blob
+    // Reject non-answers / weak matches (query echoed in "no info" text, etc.)
+    if(/do not provide|no (information|results|address)|not found|could not find|unknown hotel/i.test(blob)){
+      return {ok:false, reason:'low_score'};
+    }
     const tokens=norm(query).split(' ').filter(t=>t.length>=4);
-    const nb=norm(blob);
-    if(tokens.length && !tokens.some(tok=>nb.includes(tok))) return {ok:false, reason:'low_score'};
+    const titles=norm(((data.results||[]).map(x=>(x.title||'')+' '+(x.content||'').slice(0,200))).join(' '));
+    const addrN=norm(address);
+    // Prefer token hit in address or result titles — not merely in the echoed query/answer
+    if(tokens.length){
+      const hit=tokens.some(tok=>addrN.includes(tok) || titles.includes(tok));
+      if(!hit) return {ok:false, reason:'low_score'};
+      // Single long nonsense token (e.g. ZZZNOTAREAL...) that only appears as the query itself
+      if(tokens.length===1 && tokens[0].length>=16 && !addrN.includes(tokens[0].slice(0,8))){
+        return {ok:false, reason:'low_score'};
+      }
+    }
     const hotel={id:'tavily-'+Date.now(), aliases:[query], name, address, phone: (phone||'').trim(), website, source:'tavily'};
     return {ok:true, hotel};
   }catch(e){
