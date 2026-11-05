@@ -267,33 +267,22 @@ details.card>summary{cursor:pointer; font-weight:600}
     </div>
   </div>
 
-  <details class="card"><summary data-i="set"></summary>
-    <p class="muted" data-i="setd"></p>
-    <div class="row">
-      <select id="prov"><option value="" data-i="off"></option><option value="groq">Groq</option><option value="gemini">Gemini</option></select>
-      <input type="password" id="key" placeholder="API key" style="flex:1;min-width:180px">
-      <label class="muted"><input type="checkbox" id="ocrv" checked> <span data-i="ocrv"></span></label>
-      <button class="sec" onclick="saveSet()" data-i="save"></button>
-    </div>
-  </details>
 </main>
 <div id="toasts"></div>
 <script>
 
 
-const I={vi:{sub:'Tải lên file Excel/PDF → kiểm tra thông tin → tạo văn bản Word. Mọi xử lý đều diễn ra ngay trên trình duyệt; tệp của bạn không được gửi đi đâu (trừ khi bạn bật AI bằng khóa riêng).',
+const I={vi:{sub:'Tải lên file Excel/PDF → kiểm tra thông tin → tạo văn bản Word. Mọi xử lý chính diễn ra trên trình duyệt.',
 s1:'1. Chọn mẫu văn bản',addtpl:'Thêm mẫu mới (file .docx có chỗ điền như {{customer_name}}, được lưu trên trình duyệt này):',s2:'2. Tải lên file dữ liệu',extract:'Đọc dữ liệu',
 s3:'3. Kiểm tra & chỉnh sửa',s3d:'Mỗi dòng tương ứng một bộ văn bản. Bạn có thể sửa trực tiếp từng ô.',addrow:'+ Thêm dòng',gen:'Tạo & tải văn bản',txt:'Nội dung đã đọc được',
-set:'⚙️ Cài đặt (AI – không bắt buộc)',setd:'Lấy khóa miễn phí tại console.groq.com hoặc aistudio.google.com. Khóa chỉ được lưu trên trình duyệt này và dùng khi đọc file PDF.',
-off:'Tắt (đọc theo quy tắc)',ocrv:'Nhận dạng chữ tiếng Việt + tiếng Anh',save:'Lưu',ex:'mẫu ví dụ',del:'xóa',delq:'Bạn có chắc muốn xóa mẫu',badtpl:'Mẫu không hợp lệ: ',
+ex:'mẫu ví dụ',del:'xóa',delq:'Bạn có chắc muốn xóa mẫu',badtpl:'Mẫu không hợp lệ: ',
 ocr:'Đang nhận dạng chữ trang %i/%n (lần đầu cần tải dữ liệu ngôn ngữ, vui lòng chờ)...',aifail:'AI gặp lỗi: ',pick:'Vui lòng chọn một file.',extracting:'Đang đọc dữ liệu, vui lòng chờ...',
 badfile:'Vui lòng tải lên file .xlsx, .xls, .csv hoặc .pdf',err:'Đã xảy ra lỗi: ',done:'Đã đọc %r dòng dữ liệu. Cách đọc: %m. Số trang nhận dạng chữ (OCR): %o.',rules:'theo quy tắc',
 nothing:'Chưa có gì để tạo. Vui lòng chọn mẫu và nhập dữ liệu.',saved:'Đã lưu trên trình duyệt này.',zip:'van-ban.zip',lang:'English'},
-en:{sub:'Upload Excel/PDF → review fields → generate Word documents. Everything runs in your browser; files never leave this computer (except to your AI provider if you add a key).',
+en:{sub:'Upload Excel/PDF → review fields → generate Word documents. Core processing runs in your browser.',
 s1:'1. Choose templates',addtpl:'Add a template (.docx with placeholders like {{customer_name}}, saved in this browser):',s2:'2. Upload data file',extract:'Extract',
 s3:'3. Review & edit',s3d:'One row = one set of documents. Edit any cell.',addrow:'+ Row',gen:'Generate & download',txt:'Extracted text',
-set:'⚙️ Settings (optional AI)',setd:'Free key from console.groq.com or aistudio.google.com. Stored only in this browser. Used for PDFs.',
-off:'Off (rule-based)',ocrv:'OCR Vietnamese + English',save:'Save',ex:'example',del:'delete',delq:'Delete template',badtpl:'Invalid template: ',
+ex:'example',del:'delete',delq:'Delete template',badtpl:'Invalid template: ',
 ocr:'OCR page %i/%n (first run downloads language data)...',aifail:'AI failed: ',pick:'Please pick a file.',extracting:'Extracting...',
 badfile:'Upload .xlsx, .xls, .csv or .pdf',err:'Error: ',done:'%r record(s). Method: %m. OCR pages: %o.',rules:'rules',
 nothing:'Nothing to generate.',saved:'Saved in this browser.',zip:'documents.zip',lang:'Tiếng Việt'}};
@@ -370,22 +359,24 @@ async function readPdf(buf){const pdf=await pdfjsLib.getDocument({data:buf}).pro
   if(tx.length<20){info.textContent=t('ocr').replace('%i',i).replace('%n',pdf.numPages);
    const vp=p.getViewport({scale:2.5}),c=document.createElement('canvas');c.width=vp.width;c.height=vp.height;
    await p.render({canvasContext:c.getContext('2d'),viewport:vp}).promise;
-   const r=await Tesseract.recognize(c,ocrv.checked?'vie+eng':'eng');tx=r.data.text;ocr++}
+   const r=await Tesseract.recognize(c,'vie+eng');tx=r.data.text;ocr++}
   out.push(tx)}return {text:out.join('\n'),ocr}}
 function ruleKV(text){const kv={};text.split('\n').forEach(l=>{const m=l.match(/^\s*([^:]{2,40}):\s*(.+)/);if(m&&!(norm(m[1]) in kv))kv[norm(m[1])]=m[2].trim()});return kv}
-async function ai(text){const p=localStorage.prov,k=localStorage.key;if(!p||!k||!fields.length)return null;
+async function ai(text){
+ const cfg=window.DOCGEN_CONFIG||{}; const k=cfg.GEMINI_API_KEY||''; if(!k||!fields.length)return null;
+ const model=cfg.GEMINI_MODEL||'gemini-2.0-flash';
  const prompt=`Extract these fields from the document and return ONLY a JSON object with exactly these keys (empty string if unknown): ${JSON.stringify(fields)}\n\nDOCUMENT:\n${text.slice(0,12000)}`;
- try{if(p=='groq'){const r=await fetch('https://api.groq.com/openai/v1/chat/completions',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+k},
-   body:JSON.stringify({model:'llama-3.3-70b-versatile',response_format:{type:'json_object'},messages:[{role:'user',content:prompt}]})});return JSON.parse((await r.json()).choices[0].message.content)}
-  const r=await fetch('https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key='+encodeURIComponent(k),{method:'POST',headers:{'Content-Type':'application/json'},
-   body:JSON.stringify({contents:[{parts:[{text:prompt}]}],generationConfig:{responseMimeType:'application/json'}})});return JSON.parse((await r.json()).candidates[0].content.parts[0].text)}
+ try{
+  const r=await fetch('https://generativelanguage.googleapis.com/v1beta/models/'+model+':generateContent?key='+encodeURIComponent(k),{method:'POST',headers:{'Content-Type':'application/json'},
+   body:JSON.stringify({contents:[{parts:[{text:prompt}]}],generationConfig:{responseMimeType:'application/json'}})});
+  return JSON.parse((await r.json()).candidates[0].content.parts[0].text)}
  catch(e){console.warn(e);info.textContent+=' ('+t('aifail')+e.message+')';return null}}
 async function extract(){const f=data.files[0];if(!f)return toast(t('pick'),'warn');info.textContent=t('extracting');
  const buf=await f.arrayBuffer(),n=f.name.toLowerCase();let text='',ocr=0,method='rules';
  try{if(/\.(xlsx|xls|csv)$/.test(n)){const wb=XLSX.read(buf);const ws=wb.Sheets[wb.SheetNames[0]];
    records=XLSX.utils.sheet_to_json(ws,{defval:'',raw:false}).map(r=>Object.fromEntries(Object.entries(r).map(([k,v])=>[norm(k),String(v)])));text=XLSX.utils.sheet_to_csv(ws)}
   else if(n.endsWith('.pdf')){({text,ocr}=await readPdf(buf));let r=ruleKV(text);const a=await ai(text);
-   if(a){method=localStorage.prov;for(const[k,v]of Object.entries(a))if(v)r[k]=String(v)}records=[r]}
+   if(a){method='gemini';for(const[k,v]of Object.entries(a))if(v)r[k]=String(v)}records=[r]}
   else return info.textContent=t('badfile');}catch(e){info.textContent=t('err')+e.message;return}
  if(!records.length)records=[{}];txt.textContent=text.slice(0,5000);
  info.textContent=t('done').replace('%r',records.length).replace('%m',method=='rules'?t('rules'):method).replace('%o',ocr);draw()}
@@ -398,8 +389,7 @@ async function gen(){const files=[];
   d.render(rec);const tag=norm(rec.customer_name||rec.name||'')||'row'+(i+1);files.push([n.replace(/\.docx$/,'')+'_'+tag+'.docx',d.getZip().generate({type:'blob',mimeType:MIME,compression:'DEFLATE'})])}));
  if(!files.length)return toast(t('nothing'),'warn');if(files.length==1)return dl(files[0][1],files[0][0]);
  const z=new JSZip();files.forEach(([n,b])=>z.file(n,b));dl(await z.generateAsync({type:'blob'}),t('zip'))}
-function saveSet(){localStorage.prov=prov.value;localStorage.key=key.value;toast(t('saved'),'ok')}
-prov.value=localStorage.prov||'';key.value=localStorage.key||'';
+try{ localStorage.removeItem('prov'); localStorage.removeItem('key'); }catch(_){}
 
 let VDATA=null, VHOTELS=[];
 function setMode(m){modeGeneric.style.display=m==='generic'?'block':'none';modeVoucher.style.display=m==='voucher'?'block':'none'}

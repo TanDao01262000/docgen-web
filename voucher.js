@@ -727,7 +727,7 @@ async function serperHotelLookup(query, city){
 
 async function geminiHotelLookup(query){
   const cfg=window.DOCGEN_CONFIG||{};
-  const key=cfg.GEMINI_API_KEY || (localStorage.prov==='gemini'?localStorage.key:'') || '';
+  const key=cfg.GEMINI_API_KEY||'';
   if(!key) return null;
   const model=cfg.GEMINI_MODEL||'gemini-3.5-flash-lite';
   const prompt='Find the official full hotel or cruise ship contact details for: "'+query+'" in Vietnam.\n'
