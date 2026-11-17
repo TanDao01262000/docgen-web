@@ -604,7 +604,8 @@ async function vSaveHotel(i){
   const phone=(lines.find(l=>/^tel|^telefon/i.test(l))||'').replace(/^Tel(efon)?\s*:\s*/i,'');
   const website=(lines.find(l=>/^web/i.test(l))||'').replace(/^Web\s*:\s*/i,'');
   const id=(r.hotel_id)||(name?('wife-'+Voucher.norm(name).toLowerCase().replace(/\s+/g,'-').slice(0,48)):'custom-'+Date.now());
-  const h={id, aliases:[r.hotel_name, name, r.city].filter(Boolean), name, address, phone, website, source:'wife'};
+  const aliases=[r.hotel_name, name].filter(Boolean).filter(a=>a && !(window.Voucher && Voucher.norm && ['HA NOI','HANOI','NINH BINH','HOI AN','HUE','HA LONG BAY','SAI GON','MUI NE','DA NANG','PHU QUOC','CAT TIEN'].includes(Voucher.norm(a))));
+  const h={id, aliases, name, address, phone, website, source:'wife'};
   Voucher.saveHotelExtra(h);
   r.missing=false; r.learned=true; r.source='supabase'; r.matched_name=name;
   r.address=address; r.phone=phone; r.website=website;

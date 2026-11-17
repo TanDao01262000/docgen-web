@@ -299,6 +299,9 @@ function saveHotelExtra(h){
   if(i>=0) extra[i]=h; else extra.push(h);
   localStorage.hotelDir=JSON.stringify(extra);
 }
+const CITY_ONLY_ALIASES=new Set(['HA NOI','HANOI','HA LONG','HA LONG BAY','HALONG','NINH BINH','HUE','HOI AN','SAI GON','SAIGON','HCMC','HO CHI MINH','CAT TIEN','PHU QUOC','DA NANG','DANANG','NHA TRANG','MUI NE','MUINE','SGN','HAN','DAD','PQC']);
+function isCityOnlyAlias(k){ return CITY_ONLY_ALIASES.has(norm(k)); }
+
 function matchHotel(hotels, name){
   const n=norm(name); if(!n) return null;
   const drop=new Set(['HOTEL','RESORT','BOUTIQUE','SPA','THE','AND','LODGE','SUITES','SUITE']);
@@ -308,6 +311,8 @@ function matchHotel(hotels, name){
     const keys=[h.name,...(h.aliases||[])].map(norm);
     for(const k of keys){
       if(!k) continue;
+      // City-only aliases ("HOI AN", "NINH BINH") must not identify a property
+      if(isCityOnlyAlias(k) && k!==n) continue;
       let s=0;
       if(k===n) s=100;
       else if(n.includes(k)||k.includes(n)) s=80;
@@ -606,17 +611,17 @@ function parseSummary(wb, hotels){
       const h=matchHotel(hotels, hotel);
       const cityKey=canonicalCity(city) || norm(city).replace(/ HOMESTAY$/,'');
       if(!h) flags.push({level:'warn', msg:`Chưa có địa chỉ khách sạn: ${hotel||city}`});
-      if(h && cityKey) hotelByCity[cityKey]=h;
-      // also index common aliases
+      const displayName=(h&&h.name)||hotel||city;
+      const tripHotel=h || {name:displayName, address:'', phone:'', website:'', source:''};
+      if(cityKey) hotelByCity[cityKey]=tripHotel;
       if(h){
-        for(const alias of [cityKey, canonicalCity(hotel), norm(hotel)]){
-          if(alias) hotelByCity[alias]=h;
+        for(const alias of [canonicalCity(hotel), norm(hotel)]){
+          if(alias && !isCityOnlyAlias(alias)) hotelByCity[alias]=h;
         }
       }
 
       const note=[res, room].filter(Boolean).join('\n\n');
-      const displayName=(h&&h.name)||hotel||city;
-      acc_rows.push({
+            acc_rows.push({
         is_hotel:true, is_train:false,
         city: cityKey||norm(city),
         check_in: cinP.dayMon||cin,
@@ -1153,22 +1158,10 @@ async function loadSupabaseOverrides(force){
 function matchOverride(list, query){
   if(!list||!list.length) return null;
   const n=norm(query); if(!n) return null;
-  let best=null, score=0;
-  for(const h of list){
-    const keys=[h.name,...(h.aliases||[])].map(norm);
-    for(const k of keys){
-      if(!k) continue;
-      let s=0;
-      if(k===n) s=100;
-      else if(n.includes(k)||k.includes(n)) s=80;
-      else {
-        const at=new Set(k.split(' ')), bt=n.split(' ');
-        s=bt.filter(t=>at.has(t)&&t.length>2).length*15;
-      }
-      if(s>score){score=s; best=h;}
-    }
-  }
-  if(score<50||!best) return null;
+  // Reuse directory matching (ignores city-only aliases, rejects conflicting brands)
+  const fake=list.map(h=>({...h, name:h.name, aliases:h.aliases||[]}));
+  const best=matchHotel(fake, query);
+  if(!best) return null;
   return {
     id:best.id, aliases:best.aliases||[], name:best.name,
     address:best.address||'', phone:best.phone||'', website:best.website||'',
@@ -1178,8 +1171,9 @@ function matchOverride(list, query){
 async function supabaseUpsertOverride(h){
   if(!supabaseEnabled()||!h||!h.name) return {ok:false, reason:'disabled'};
   const id=h.id || ('wife-'+norm(h.name).toLowerCase().replace(/\s+/g,'-').slice(0,48));
+  const aliases=(h.aliases||[h.name]).filter(a=>a && !isCityOnlyAlias(a));
   const row={
-    id, aliases: h.aliases||[h.name], name:h.name,
+    id, aliases: aliases.length?aliases:[h.name], name:h.name,
     address:h.address||'', phone:h.phone||'', website:h.website||'',
     source: h.source==='wife'||h.source==='supabase'?'wife':(h.source||'wife'),
     updated_at: new Date().toISOString()
