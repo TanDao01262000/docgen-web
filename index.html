@@ -550,6 +550,12 @@ function reportClientError(err, extra){
 async function vExtract(){
   const f=vfile.files[0]; if(!f) return toast(t('pick'),'warn');
   const seq=++EXTRACT_SEQ;
+  if(LAST_DOWNLOAD && LAST_DOWNLOAD.url){
+    try{ URL.revokeObjectURL(LAST_DOWNLOAD.url); }catch(_){}
+  }
+  LAST_DOWNLOAD=null;
+  const box=document.getElementById('dlFallback');
+  if(box) box.classList.remove('show');
   vinfo.textContent=t('extracting');
   const btn=document.getElementById('vexbtn'); if(btn){btn.disabled=true;btn.classList.add('loading');}
   let parsedOk=false;
