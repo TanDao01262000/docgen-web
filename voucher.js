@@ -4,6 +4,56 @@ const MONTHS={JAN:1,FEB:2,MAR:3,APR:4,MAY:5,JUN:6,JUL:7,AUG:8,SEP:9,OCT:10,NOV:1
 const MON=['','JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC'];
 function norm(s){return String(s||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/đ/g,'d').replace(/Đ/g,'D').toUpperCase().replace(/[^A-Z0-9]+/g,' ').trim();}
 function todayVN(){const d=new Date();const p=n=>String(n).padStart(2,'0');return `${p(d.getDate())}.${p(d.getMonth()+1)}.${d.getFullYear()}`;}
+const NET_TIMEOUT_MS=4000;
+function buildVersion(){ return String((window.DOCGEN_CONFIG||{}).BUILD_VERSION||'dev'); }
+function assetUrl(path){
+  const v=buildVersion();
+  if(!path) return path;
+  if(/^(?:[a-z]+:|\/\/)/i.test(path)) return path;
+  return path+(path.indexOf('?')>=0?'&':'?')+'v='+encodeURIComponent(v);
+}
+function withTimeout(promise, ms, label){
+  const t=ms==null?NET_TIMEOUT_MS:ms;
+  return new Promise((resolve, reject)=>{
+    let done=false;
+    const id=setTimeout(()=>{ if(done) return; done=true; const e=new Error((label||'request')+' timeout'); e.reason='timeout'; reject(e); }, t);
+    Promise.resolve(promise).then(
+      v=>{ if(done) return; done=true; clearTimeout(id); resolve(v); },
+      e=>{ if(done) return; done=true; clearTimeout(id); reject(e); }
+    );
+  });
+}
+async function fetchTimeout(url, opts, ms, label){
+  const tm=ms==null?NET_TIMEOUT_MS:ms;
+  const ctrl=new AbortController();
+  const userSignal=opts&&opts.signal;
+  if(userSignal){
+    if(userSignal.aborted) ctrl.abort();
+    else userSignal.addEventListener('abort',()=>ctrl.abort(),{once:true});
+  }
+  const id=setTimeout(()=>ctrl.abort(), tm);
+  try{
+    return await fetch(url, Object.assign({}, opts||{}, {signal:ctrl.signal}));
+  }catch(e){
+    if(ctrl.signal.aborted){ const err=new Error((label||url)+' timeout'); err.reason='timeout'; throw err; }
+    throw e;
+  }finally{ clearTimeout(id); }
+}
+async function logClientError(info){
+  try{
+    if(typeof supabaseEnabled==='function' && !supabaseEnabled()) return;
+    const row={
+      message:String((info&&info.message)||'').slice(0,2000),
+      stack:String((info&&info.stack)||'').slice(0,8000),
+      file_name:String((info&&info.file_name)||'').slice(0,300),
+      build_version:buildVersion(),
+      user_agent:(typeof navigator!=='undefined'&&navigator.userAgent)||''
+    };
+    await withTimeout(supabaseFetch('client_errors',{method:'POST', headers:{'Prefer':'return=minimal'}, body:JSON.stringify(row)}), NET_TIMEOUT_MS, 'client_errors');
+  }catch(e){ console.warn('logClientError failed', e); }
+}
+
+
 function parseDayMon(s){// "12JUN" / "12JUN _06:05" / "16JUN - Late check out"
   s=String(s||'').trim();
   const m=s.match(/(\d{1,2})\s*([A-Za-z]{3})/);
@@ -193,73 +243,102 @@ function workbookSheetNames(wb){
   if(wb && Array.isArray(wb.SheetNames) && wb.SheetNames.length) return wb.SheetNames;
   return Object.keys((wb&&wb.Sheets)||{});
 }
-function findSheetName(wb, ...candidates){
-  const names=workbookSheetNames(wb);
-  const wanted=candidates.map(sheetNameKey).filter(Boolean);
-  for(const n of names){
-    if(wanted.includes(sheetNameKey(n))) return n;
-  }
-  for(const n of names){
-    const k=sheetNameKey(n);
-    for(const w of wanted){
-      const toks=w.split(' ').filter(Boolean);
-      if(toks.length && toks.every(tok=>k.includes(tok))) return n;
-    }
-  }
-  return null;
+function isSheetHidden(wb, name){
+  try{
+    const arr=(wb.Workbook&&wb.Workbook.Sheets)||[];
+    const rec=arr.find(s=>s && (s.name===name || s.Name===name));
+    if(!rec) return false;
+    const h=rec.Hidden!=null?rec.Hidden:rec.hidden;
+    return !!(h && h!==0);
+  }catch(e){ return false; }
 }
 function sheetMatrixByName(wb, name){
   const ws=(wb&&wb.Sheets||{})[name]; if(!ws) return [];
   return XLSX.utils.sheet_to_json(ws,{header:1,defval:'',raw:false});
 }
-function sheetLooksLikeSummary(mat){
-  if(!mat||mat.length<5) return false;
-  let acc=false, tr=false, carrier=false, hotel=false;
-  for(const r of mat.slice(0,80)){
-    const a=cell(r,0), b=cell(r,1);
-    if(/^accommodation$/i.test(a) || (/^hotel$/i.test(b) && /check\s*in/i.test(cell(r,2)))) acc=true;
-    if(/^transport$/i.test(a) || (/pick-?up\s*TIME/i.test(b))) tr=true;
-    if(/^carrier$/i.test(a)) carrier=true;
-    if(/^hotel$/i.test(b) && cell(r,2)) hotel=true;
+function rowBlob(r){ return ((r||[]).map(v=>String(v||'').trim()).filter(Boolean).join(' ')); }
+const RE_ACC=/^(accommodation|luu tru|lưu trú|ubytovani|ubytování)$/i;
+const RE_TR=/^(transport|van chuyen|vận chuyển|doprava)$/i;
+const RE_CARRIER=/^(carrier|flight|flights|chuyen bay|chuyến bay|letenky|international tickets)$/i;
+const RE_ACT=/^(activities|hoat dong|hoạt động|aktivity)$/i;
+function scoreSummarySheet(mat){
+  if(!mat||!mat.length) return 0;
+  let score=0, acc=0, tr=0, carrier=0, flights=0, meta=0, gt=0, hotelRows=0;
+  const n=Math.min(mat.length, 140);
+  for(let i=0;i<n;i++){
+    const r=mat[i], a=cell(r,0), b=cell(r,1), c=cell(r,2), all=rowBlob(r);
+    if(RE_ACC.test(a) || (/^(hotel|khach san|khách sạn)$/i.test(b) && /check\s*in|nhan phong|nhận phòng/i.test(c))) acc++;
+    if(RE_TR.test(a) || (/pick-?up\s*TIME|gio don|giờ đón/i.test(b) && /pick-?up\s*PLACE|diem don|điểm đón/i.test(c))) tr++;
+    if(RE_CARRIER.test(a) || (/^destination$/i.test(b) && /departure/i.test(c) && /^carrier$/i.test(a))) carrier++;
+    if(RE_ACT.test(a)) score+=8;
+    if(/date of the (tour|trip)|sold pax|responsible person|guide contact|pax contact|date of tour|ngay (khoi hanh|tour)|ngày/i.test(a) || /date of the tour/i.test(all)) meta++;
+    if(/\d+\s*\.\s*(MR|MS|MRS)\.?[\s/]/i.test(all) || /\d+\s*\.\s*[A-ZÁ-Ž]{2,}\s*\/\s*[A-ZÁ-Ž]{2,}/i.test(all)) gt++;
+    if(/^[A-Z]{2}\s*\d{1,4}\b/.test(a) && /(\d{1,2}\s*[A-Z]{3}|JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)/i.test(all)) flights++;
+    if(a && b && /(\d{1,2}\s*[A-Z]{3})/i.test(c) && /hotel|cruise|resort|lodge|suite|bungalow/i.test(b+a)) hotelRows++;
   }
-  return (acc&&tr) || (acc&&carrier) || (tr&&carrier);
+  if(acc) score+=60+Math.min(acc,2)*5;
+  if(tr) score+=60+Math.min(tr,2)*5;
+  if(carrier) score+=25;
+  if(flights>=2) score+=15;
+  else if(flights) score+=6;
+  if(meta) score+=12;
+  if(gt) score+=8;
+  if(hotelRows>=2) score+=10;
+  if(acc && tr) score+=20;
+  if(acc && carrier) score+=10;
+  return score;
 }
-function sheetLooksLikeClients(mat){
-  if(!mat||!mat.length) return false;
-  for(const r of mat.slice(0,8)){
-    const map=headerIndexMap(r);
-    if(map.first!=null && map.surname!=null) return true;
+function scoreClientsSheet(mat){
+  if(!mat||!mat.length) return 0;
+  let score=0;
+  const n=Math.min(mat.length, 20);
+  for(let i=0;i<n;i++){
+    const map=headerIndexMap(mat[i]);
+    if(map.first==null || map.surname==null) continue;
+    score+=90;
+    if(map.sex!=null) score+=20;
+    if(map.no!=null) score+=6;
+    let guests=0;
+    for(let j=i+1;j<Math.min(i+12, mat.length);j++){
+      const first=cell(mat[j], map.first), surname=cell(mat[j], map.surname);
+      if(first || surname) guests++;
+    }
+    score+=Math.min(30, guests*6);
+    break;
   }
-  return false;
+  return score;
 }
-function loadSummarySheet(wb){
-  const named=findSheetName(wb,'Summary','Souhrn','Tour summary');
-  if(named){
-    const mat=sheetMatrixByName(wb,named);
-    if(mat.length) return mat;
-  }
-  for(const n of workbookSheetNames(wb)){
-    const mat=sheetMatrixByName(wb,n);
-    if(sheetLooksLikeSummary(mat)) return mat;
-  }
-  return [];
+function listSheetMatrices(wb){
+  return workbookSheetNames(wb).map(name=>({
+    name,
+    hidden:isSheetHidden(wb,name),
+    mat:sheetMatrixByName(wb,name)
+  }));
 }
-function loadClientsSheet(wb){
-  const named=findSheetName(wb,'Clients + Rooming list','Clients','Rooming list','Clients + Rooming','Rooming','Guests');
-  if(named){
-    const mat=sheetMatrixByName(wb,named);
-    if(mat.length) return mat;
+// Content-only detection — sheet *names* are ignored on purpose.
+function detectSheets(wb){
+  const sheets=listSheetMatrices(wb);
+  let sumBest=null, sumScore=-1, cliBest=null, cliScore=-1;
+  for(const s of sheets){
+    const ss=scoreSummarySheet(s.mat)+(s.hidden?-5:0);
+    const cs=scoreClientsSheet(s.mat)+(s.hidden?-5:0);
+    if(ss>sumScore){ sumScore=ss; sumBest=s; }
+    if(cs>cliScore){ cliScore=cs; cliBest=s; }
   }
-  for(const n of workbookSheetNames(wb)){
-    if(sheetNameKey(n).includes('summary')) continue;
-    const mat=sheetMatrixByName(wb,n);
-    if(sheetLooksLikeClients(mat)) return mat;
-  }
-  return [];
+  const summary=(sumBest && sumScore>=40)?sumBest.mat:[];
+  let clients=[];
+  if(cliBest && cliScore>=50) clients=cliBest.mat;
+  else if(summary && scoreClientsSheet(summary)>=50) clients=summary;
+  else if(summary && summary.length) clients=summary; // GT line may live on the summary sheet
+  return {summary, clients, sumScore, cliScore, sumName:sumBest&&sumBest.name, cliName:cliBest&&cliBest.name};
 }
+function loadSummarySheet(wb){ return detectSheets(wb).summary; }
+function loadClientsSheet(wb){ return detectSheets(wb).clients; }
+function sheetLooksLikeSummary(mat){ return scoreSummarySheet(mat)>=40; }
+function sheetLooksLikeClients(mat){ return scoreClientsSheet(mat)>=50; }
 function sheetMatrix(wb, name){
-  const resolved=findSheetName(wb, name) || name;
-  return sheetMatrixByName(wb, resolved);
+  // Kept for callers that pass an explicit name; detection of tour data does not use this.
+  return sheetMatrixByName(wb, name);
 }
 function findRow(mat, pred, start=0){
   for(let i=start;i<mat.length;i++) if(pred(mat[i],i)) return i;
@@ -267,21 +346,50 @@ function findRow(mat, pred, start=0){
 }
 function cell(row,i){return String((row&&row[i])||'').trim();}
 
-async function loadHotels(){
-  const base=await fetch('hotels.json').then(r=>r.json());
+let _hotelsJsonCache=null;
+async function loadHotelsLocal(){
+  let base=_hotelsJsonCache;
+  if(!base){
+    try{
+      const r=await fetchTimeout(assetUrl('hotels.json'), {}, NET_TIMEOUT_MS, 'hotels.json');
+      if(r.ok) base=await r.json();
+    }catch(e){ console.warn('hotels.json fetch failed', e); }
+    if(Array.isArray(base)) _hotelsJsonCache=base;
+  }
+  if(!Array.isArray(base)) base=[];
   let extra=[]; try{extra=JSON.parse(localStorage.hotelDir||'[]')}catch(e){}
-  let merged=mergeHotels(base, extra);
-  // Supabase overrides win over hotels.json + localStorage
-  try{
-    const overs=await loadSupabaseOverrides(false);
-    if(overs && overs.length){
-      const mapped=overs.map(h=>({
-        id:h.id, aliases:h.aliases||[], name:h.name,
-        address:h.address||'', phone:h.phone||'', website:h.website||'',
-        source:'supabase', learned:true
-      }));
-      merged=mergeHotels(merged, mapped);
+  return mergeHotels(base, extra);
+}
+function applyOverrideList(merged, overs){
+  if(!overs || !overs.length) return merged;
+  const mapped=overs.map(h=>({
+    id:h.id, aliases:h.aliases||[], name:h.name,
+    address:h.address||'', phone:h.phone||'', website:h.website||'',
+    source:'supabase', learned:true
+  }));
+  return mergeHotels(merged, mapped);
+}
+function rematchHotelRows(data, hotels){
+  if(!data || !hotels) return;
+  for(const r of (data.acc_rows||[])){
+    if(!r.is_hotel || r.is_train) continue;
+    const mh=matchHotel(hotels, r.hotel_name||r.matched_name||'');
+    if(mh && (mh.address||mh.phone||mh.learned||mh.source==='supabase')){
+      if(mh.learned||mh.source==='supabase'){ r.learned=true; r.source='supabase'; }
+      r.matched_name=mh.name||r.matched_name;
+      if(mh.address) r.address=mh.address;
+      if(mh.phone) r.phone=mh.phone;
+      const block=hotelBlock(mh);
+      if(block) r.hotel_block=block;
+      if(mh.address||mh.phone) r.missing=false;
     }
+  }
+}
+async function loadHotels(){
+  let merged=await loadHotelsLocal();
+  try{
+    const overs=await withTimeout(loadSupabaseOverrides(false), NET_TIMEOUT_MS, 'overrides');
+    merged=applyOverrideList(merged, overs);
   }catch(e){ console.warn('Supabase overrides skip', e); }
   return merged;
 }
@@ -372,10 +480,10 @@ function headerIndexMap(row){
   (row||[]).forEach((v,i)=>{
     const k=norm(v).replace(/\s+/g,' ');
     if(!k) return;
-    if(/^(NO|STT|NR|ROW|#)$/.test(k)) map.no=i;
-    else if(/^(NAME|FIRST|FIRST NAME|GIVEN NAME|JMENO|JMENO)$/.test(k)) map.first=i;
-    else if(/^(SURNAME|LAST|LAST NAME|FAMILY|PRIJMENI|PRIJMENI)$/.test(k)) map.surname=i;
-    else if(/^(SEX|GENDER|TITLE|POHLAVI|POHLAVI)$/.test(k)) map.sex=i;
+        if(/^(NO|STT|NR|ROW|#)$/.test(k)) map.no=i;
+    else if(/^(NAME|FIRST|FIRST NAME|GIVEN NAME|JMENO|TEN)$/.test(k)) map.first=i;
+    else if(/^(SURNAME|LAST|LAST NAME|FAMILY|PRIJMENI|HO)$/.test(k)) map.surname=i;
+    else if(/^(SEX|GENDER|TITLE|POHLAVI|GIOI TINH)$/.test(k)) map.sex=i;
   });
   return map;
 }
@@ -872,8 +980,22 @@ function parseSummary(wb, hotels){
   };
 }
 
+const _tplCache={};
+async function loadTemplateBuf(templateName){
+  if(_tplCache[templateName]) return _tplCache[templateName];
+  const r=await fetchTimeout(assetUrl('templates/'+templateName), {}, 8000, 'template');
+  if(!r.ok) throw new Error('Template HTTP '+r.status+' '+templateName);
+  const buf=await r.arrayBuffer();
+  _tplCache[templateName]=buf;
+  return buf;
+}
+async function prefetchVoucherTemplates(){
+  try{
+    await Promise.all(['voucher_accommodation.docx','voucher_transfers.docx'].map(n=>loadTemplateBuf(n)));
+  }catch(e){ console.warn('template prefetch failed', e); }
+}
 async function renderVoucherDoc(templateName, data){
-  const buf=await (await fetch('templates/'+templateName)).arrayBuffer();
+  const buf=await loadTemplateBuf(templateName);
   const zip=new PizZip(buf);
   const doc=new docxtemplater(zip,{paragraphLoop:true,linebreaks:true,delimiters:{start:'{',end:'}'},nullGetter:()=>''});
   doc.render(data);
@@ -966,11 +1088,11 @@ async function serperHotelLookup(query, city){
     return s;
   }
   async function fetchPlaces(path){
-    const r=await fetch('https://google.serper.dev/'+path,{
+    const r=await fetchTimeout('https://google.serper.dev/'+path,{
       method:'POST',
       headers:{'X-API-KEY':key,'Content-Type':'application/json'},
       body:JSON.stringify({q, gl:'vn', hl:'en'})
-    });
+    }, NET_TIMEOUT_MS, 'serper');
     if(r.status===402||r.status===403||r.status===429){ const e=new Error('quota'); e.reason='quota'; e.status=r.status; throw e; }
     if(!r.ok){ const e=new Error('http'); e.reason='http'; e.status=r.status; throw e; }
     const data=await r.json();
@@ -1031,8 +1153,8 @@ async function geminiHotelLookup(query){
   async function call(useSearch){
     const body={contents:[{parts:[{text:prompt}]}], generationConfig:{temperature:0.2}};
     if(useSearch) body.tools=[{google_search:{}}];
-    const r=await fetch('https://generativelanguage.googleapis.com/v1beta/models/'+model+':generateContent?key='+encodeURIComponent(key),{
-      method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
+    const r=await fetchTimeout('https://generativelanguage.googleapis.com/v1beta/models/'+model+':generateContent?key='+encodeURIComponent(key),{
+      method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)}, NET_TIMEOUT_MS, 'gemini');
     const textRaw=await r.text();
     if(!r.ok){ const err=new Error('HTTP '+r.status); err.status=r.status; err.body=textRaw; throw err; }
     const j=JSON.parse(textRaw);
@@ -1058,10 +1180,10 @@ async function tavilyHotelLookup(query, city){
   if(!key) return {ok:false, reason:'no_key'};
   const q=[query, city, 'Vietnam', 'address', 'phone'].filter(Boolean).join(' ').replace(/\s+/g,' ').trim();
   try{
-    const r=await fetch('https://api.tavily.com/search',{
+    const r=await fetchTimeout('https://api.tavily.com/search',{
       method:'POST', headers:{'Content-Type':'application/json'},
       body:JSON.stringify({api_key:key, query:q, include_answer:true, search_depth:'basic', max_results:5})
-    });
+    }, NET_TIMEOUT_MS, 'tavily');
     if(r.status===402||r.status===403||r.status===429) return {ok:false, reason:'quota', status:r.status};
     if(!r.ok) return {ok:false, reason:'http', status:r.status};
     const data=await r.json();
@@ -1131,7 +1253,7 @@ async function supabaseFetch(path, opts){
     'Content-Type':'application/json'
   }, (opts&&opts.headers)||{});
   try{
-    const r=await fetch(c.url+'/rest/v1/'+path, Object.assign({}, opts||{}, {headers}));
+    const r=await fetchTimeout(c.url+'/rest/v1/'+path, Object.assign({}, opts||{}, {headers}), NET_TIMEOUT_MS, 'supabase');
     if(!r.ok){
       const t=await r.text().catch(()=>'');
       console.warn('Supabase HTTP', r.status, t.slice(0,200));
@@ -1208,7 +1330,7 @@ async function resolveHotelContact(query, city){
   // Order: Supabase overrides > hotels.json (caller) > localStorage cache > Serper > Tavily > Gemini
   // 0) Supabase learned overrides (wife edits win)
   try{
-    const overs=await loadSupabaseOverrides(false);
+    const overs=await withTimeout(loadSupabaseOverrides(false), NET_TIMEOUT_MS, 'override-lookup');
     const ov=matchOverride(overs, query) || (city?matchOverride(overs, city+' '+query):null);
     if(ov && (ov.address||ov.phone)){
       const h=sanitizeHotelCandidate({...ov});
@@ -1261,7 +1383,9 @@ async function enrichMissingHotels(data, hotels){
   for(const r of data.acc_rows){
     if(!r.is_hotel || r.is_train || !r.missing) continue;
     const q=r.hotel_name||r.city;
-    const found=await resolveHotelContact(q, r.city);
+    let found=null;
+    try{ found=await withTimeout(resolveHotelContact(q, r.city), NET_TIMEOUT_MS, 'hotel-lookup'); }
+    catch(e){ console.warn('hotel lookup skipped', q, e); continue; }
     if(found && (found.address||found.phone)){
       // also persist to hotelDir extras for matching next time
       saveHotelExtra(found);
@@ -1553,5 +1677,5 @@ async function addGenerationComment(generationId, commentText){
   return {ok:true, comment:row};
 }
 
-global.Voucher={parseSummary,parseSummaryFromPdfText,loadHotels,saveHotelExtra,matchHotel,hotelBlock,todayVN,norm,renderVoucherDoc,mergeHotels,geminiHotelLookup,serperHotelLookup,tavilyHotelLookup,resolveHotelContact,enrichMissingHotels,hotelCacheGet,shortenAddress,canonicalCity,parseMeals,aptCode,dateKey,parseGuestsFromClients,parseGuestsFromGt,formatGuestLine,loadSupabaseOverrides,supabaseUpsertOverride,supabaseLogCorrection,supabaseEnabled,matchOverride,sanitizeReviewData,saveGeneration,listGenerations,getGeneration,updateGenerationStatus,listGenerationComments,addGenerationComment,deriveTripDates,deriveHotelList,deriveBookingRef};
+global.Voucher={parseSummary,parseSummaryFromPdfText,loadHotels,loadHotelsLocal,applyOverrideList,rematchHotelRows,saveHotelExtra,matchHotel,hotelBlock,todayVN,norm,renderVoucherDoc,mergeHotels,geminiHotelLookup,serperHotelLookup,tavilyHotelLookup,resolveHotelContact,enrichMissingHotels,hotelCacheGet,shortenAddress,canonicalCity,parseMeals,aptCode,dateKey,parseGuestsFromClients,parseGuestsFromGt,formatGuestLine,loadSupabaseOverrides,supabaseUpsertOverride,supabaseLogCorrection,supabaseEnabled,matchOverride,sanitizeReviewData,saveGeneration,listGenerations,getGeneration,updateGenerationStatus,listGenerationComments,addGenerationComment,deriveTripDates,deriveHotelList,deriveBookingRef,buildVersion,assetUrl,withTimeout,fetchTimeout,logClientError,prefetchVoucherTemplates,detectSheets,scoreSummarySheet,scoreClientsSheet,NET_TIMEOUT_MS};
 })(window);

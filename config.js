@@ -4,5 +4,6 @@ window.DOCGEN_CONFIG=Object.assign(window.DOCGEN_CONFIG||{},{
   TAVILY_API_KEY: '',
   SUPABASE_URL: '',
   SUPABASE_ANON_KEY: '',
+  BUILD_VERSION: 'dev',
   GEMINI_MODEL: 'gemini-3.5-flash-lite'
 });
