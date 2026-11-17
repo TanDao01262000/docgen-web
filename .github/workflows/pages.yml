@@ -51,7 +51,7 @@ jobs:
           )
           html = Path("index.html").read_text(encoding="utf-8")
           html = re.sub(
-              r'(src="(?:vendor/[^"]+|config\.js|voucher\.js))(?:\?[^"]*)?"',
+              r'(src="(?:vendor/[^"?]+|config\.js|voucher\.js))(?:\?[^"]*)?"',
               rf'\1?v={ver}"',
               html,
           )

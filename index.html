@@ -601,7 +601,9 @@ async function vExtract(){
       if(seq!==EXTRACT_SEQ || VDATA!==data) return;
       const need=(VDATA.acc_rows||[]).filter(r=>r.is_hotel&&r.missing);
       if(!need.length) return;
-      vinfo.textContent=(LANG==='vi'?'Đã đọc xong — đang tra cứu khách sạn còn thiếu (có thể tạo voucher ngay)...':'Parsed — looking up missing hotels in the background. You can generate now.');
+      if(!(LAST_DOWNLOAD && LAST_DOWNLOAD.url)){
+        vinfo.textContent=(LANG==='vi'?'Đã đọc xong — đang tra cứu khách sạn còn thiếu (có thể tạo voucher ngay)...':'Parsed — looking up missing hotels in the background. You can generate now.');
+      }
       try{
         await Voucher.enrichMissingHotels(VDATA, VHOTELS);
       }catch(e){ console.warn('enrich failed', e); }
@@ -627,7 +629,10 @@ async function vExtract(){
 }
 function paintVoucherReview(fromEnrich){
   if(!VDATA) return;
-  vinfo.textContent=(LANG==='vi'?`Đã đọc: ${VDATA.acc_rows.length} dòng KS/tàu, ${VDATA.trf_rows.length} transfer/tour. (có thể tạo voucher ngay)`:`Parsed: ${VDATA.acc_rows.length} hotel/train rows, ${VDATA.trf_rows.length} transfers.`);
+  const keepDl = !!(LAST_DOWNLOAD && LAST_DOWNLOAD.url);
+  if(!keepDl){
+    vinfo.textContent=(LANG==='vi'?`Đã đọc: ${VDATA.acc_rows.length} dòng KS/tàu, ${VDATA.trf_rows.length} transfer/tour. (có thể tạo voucher ngay)`:`Parsed: ${VDATA.acc_rows.length} hotel/train rows, ${VDATA.trf_rows.length} transfers.`);
+  }
   vflags.innerHTML=(VDATA.flags||[]).map(x=>{
     const learned=/đã học|learned/i.test(x.msg||'');
     const ai=x.level==='ai'||/AI tạo|AI-generated/i.test(x.msg||'');
