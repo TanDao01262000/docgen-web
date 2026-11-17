@@ -7,9 +7,9 @@ function todayVN(){const d=new Date();const p=n=>String(n).padStart(2,'0');retur
 function parseDayMon(s){// "12JUN" / "12JUN _06:05" / "16JUN - Late check out"
   s=String(s||'').trim();
   const m=s.match(/(\d{1,2})\s*([A-Za-z]{3})/);
-  if(!m) return {raw:s, dayMon:'', late:/late/i.test(s)};
+  if(!m) return {raw:s, dayMon:'', late:/late\s*(check\s*out|c\/?o)?/i.test(s), until:(s.match(/until\s+([^,;]+)/i)||[])[1]||''};
   const mon=m[2].toUpperCase().slice(0,3);
-  return {raw:s, dayMon:`${m[1].padStart(2,'0')}-${mon}`, late:/late\s*check\s*out/i.test(s), time: (s.match(/(\d{1,2}:\d{2})/)||[])[1]||'', after:/after\s+cruise/i.test(s)};
+  return {raw:s, dayMon:`${m[1].padStart(2,'0')}-${mon}`, late:/late\s*(check\s*out|c\/?o)\b/i.test(s), time: (s.match(/(\d{1,2}:\d{2})/)||[])[1]||'', until:(s.match(/until\s+([^,;]+)/i)||[])[1]||'', after:/after\s+cruise/i.test(s)};
 }
 function parseTimeFrom(s){
   s=String(s||'');
@@ -79,6 +79,7 @@ function canonicalCity(raw){
   if(/PHU\s*QUOC|\bPQC\b|\bPQ\b/.test(n)) return 'PHU QUOC';
   if(/DA\s*NANG|DANANG/.test(n)) return 'DA NANG';
   if(/NHA\s*TRANG/.test(n)) return 'NHA TRANG';
+  if(/MUI\s*NE|MUINE/.test(n)) return 'MUI NE';
   return n.replace(/\bHOMESTAY\b/,'').replace(/\bHOTEL\b$/,'').trim();
 }
 const VN_AIRPORTS=new Set(['HAN','SGN','DAD','PQC','CXR','DLI','VCA','HPH','VII','UIH','VDO','VDH','VXN','VKG','THD','DIN','PXU','UIH','BMV','CAH','VCS','TBB']);
@@ -185,9 +186,80 @@ function parseMeals(blob){
   }
   return 'No meals';
 }
-function sheetMatrix(wb, name){
-  const ws=wb.Sheets[name]; if(!ws) return [];
+function sheetNameKey(s){
+  return String(s||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/đ/g,'d').replace(/Đ/g,'D').toLowerCase().replace(/[^a-z0-9]+/g,' ').trim();
+}
+function workbookSheetNames(wb){
+  if(wb && Array.isArray(wb.SheetNames) && wb.SheetNames.length) return wb.SheetNames;
+  return Object.keys((wb&&wb.Sheets)||{});
+}
+function findSheetName(wb, ...candidates){
+  const names=workbookSheetNames(wb);
+  const wanted=candidates.map(sheetNameKey).filter(Boolean);
+  for(const n of names){
+    if(wanted.includes(sheetNameKey(n))) return n;
+  }
+  for(const n of names){
+    const k=sheetNameKey(n);
+    for(const w of wanted){
+      const toks=w.split(' ').filter(Boolean);
+      if(toks.length && toks.every(tok=>k.includes(tok))) return n;
+    }
+  }
+  return null;
+}
+function sheetMatrixByName(wb, name){
+  const ws=(wb&&wb.Sheets||{})[name]; if(!ws) return [];
   return XLSX.utils.sheet_to_json(ws,{header:1,defval:'',raw:false});
+}
+function sheetLooksLikeSummary(mat){
+  if(!mat||mat.length<5) return false;
+  let acc=false, tr=false, carrier=false, hotel=false;
+  for(const r of mat.slice(0,80)){
+    const a=cell(r,0), b=cell(r,1);
+    if(/^accommodation$/i.test(a) || (/^hotel$/i.test(b) && /check\s*in/i.test(cell(r,2)))) acc=true;
+    if(/^transport$/i.test(a) || (/pick-?up\s*TIME/i.test(b))) tr=true;
+    if(/^carrier$/i.test(a)) carrier=true;
+    if(/^hotel$/i.test(b) && cell(r,2)) hotel=true;
+  }
+  return (acc&&tr) || (acc&&carrier) || (tr&&carrier);
+}
+function sheetLooksLikeClients(mat){
+  if(!mat||!mat.length) return false;
+  for(const r of mat.slice(0,8)){
+    const map=headerIndexMap(r);
+    if(map.first!=null && map.surname!=null) return true;
+  }
+  return false;
+}
+function loadSummarySheet(wb){
+  const named=findSheetName(wb,'Summary','Souhrn','Tour summary');
+  if(named){
+    const mat=sheetMatrixByName(wb,named);
+    if(mat.length) return mat;
+  }
+  for(const n of workbookSheetNames(wb)){
+    const mat=sheetMatrixByName(wb,n);
+    if(sheetLooksLikeSummary(mat)) return mat;
+  }
+  return [];
+}
+function loadClientsSheet(wb){
+  const named=findSheetName(wb,'Clients + Rooming list','Clients','Rooming list','Clients + Rooming','Rooming','Guests');
+  if(named){
+    const mat=sheetMatrixByName(wb,named);
+    if(mat.length) return mat;
+  }
+  for(const n of workbookSheetNames(wb)){
+    if(sheetNameKey(n).includes('summary')) continue;
+    const mat=sheetMatrixByName(wb,n);
+    if(sheetLooksLikeClients(mat)) return mat;
+  }
+  return [];
+}
+function sheetMatrix(wb, name){
+  const resolved=findSheetName(wb, name) || name;
+  return sheetMatrixByName(wb, resolved);
 }
 function findRow(mat, pred, start=0){
   for(let i=start;i<mat.length;i++) if(pred(mat[i],i)) return i;
@@ -229,6 +301,8 @@ function saveHotelExtra(h){
 }
 function matchHotel(hotels, name){
   const n=norm(name); if(!n) return null;
+  const drop=new Set(['HOTEL','RESORT','BOUTIQUE','SPA','THE','AND','LODGE','SUITES','SUITE']);
+  const sig=s=>s.split(' ').filter(t=>t.length>=3 && !drop.has(t));
   let best=null, score=0;
   for(const h of hotels){
     const keys=[h.name,...(h.aliases||[])].map(norm);
@@ -241,6 +315,15 @@ function matchHotel(hotels, name){
         const at=new Set(k.split(' ')), bt=n.split(' ');
         const inter=bt.filter(t=>at.has(t)&&t.length>2).length;
         s=inter*15;
+      }
+      // Reject different properties that only share a city/area token (TAM COC Wonderland vs Center Luxury)
+      const a=sig(n), b=sig(k);
+      const onlyA=a.filter(t=>!b.includes(t));
+      const onlyB=b.filter(t=>!a.includes(t));
+      if(onlyA.length && onlyB.length) s=Math.min(s, 35);
+      else if(onlyA.length){
+        const official=sig(norm(h.name||''));
+        if(onlyA.some(tok=>!official.includes(tok))) s=Math.min(s, 35);
       }
       if(s>score){score=s; best=h;}
     }
@@ -267,7 +350,8 @@ function resolvePlace(label, hotels, hotelByCity){
     'SGN HOTEL':'SAI GON','SAI GON HOTEL':'SAI GON','HCMC HOTEL':'SAI GON',
     'CAT TIEN HOTEL':'CAT TIEN','CAT TIEN':'CAT TIEN','CATTIEN':'CAT TIEN',
     'PHU QUOC HOTEL':'PHU QUOC','PHU QUOC':'PHU QUOC','PQC HOTEL':'PHU QUOC','PQ HOTEL':'PHU QUOC',
-    'DA NANG HOTEL':'DA NANG','NHA TRANG HOTEL':'NHA TRANG'
+    'DA NANG HOTEL':'DA NANG','NHA TRANG HOTEL':'NHA TRANG',
+    'MUI NE HOTEL':'MUI NE','MUINE HOTEL':'MUI NE','MUI NE':'MUI NE'
   };
   for(const [k,city] of Object.entries(cityMap)){
     if(n===k||n.includes(k)){const h=hotelByCity[city]; if(h) return h;}
@@ -311,11 +395,20 @@ function formatGuestLine(n,g){
 }
 function parseGuestsFromGt(blob){
   const out=[];
-  const re=/(\d+)\s*\.\s*([A-Za-zÁ-žA-Za-z]+)\s*\/\s*([A-Za-zÁ-žA-Za-z]+)(?:\s+(MR|MS|MRS)\.?\b)?/gi;
-  let m; const s=String(blob||'');
-  while((m=re.exec(s))){
+  const s=String(blob||'');
+  // "1.VESELA/ELISKA MS" or "1. SURNAME/FIRST MR"
+  const reSlash=/(\d+)\s*\.\s*([A-Za-zÁ-ž]+)\s*\/\s*([A-Za-zÁ-ž]+(?:\s+\([^)]+\))?)(?:\s+(MR|MS|MRS)\.?\b)?/gi;
+  let m;
+  while((m=reSlash.exec(s))){
     const title=(m[4]||'').toUpperCase();
-    out.push({first:m[3], surname:m[2], sex:title||'', title});
+    out.push({first:m[3].trim(), surname:m[2].trim(), sex:title||'', title});
+  }
+  if(out.length) return out;
+  // "1. MR VINS JAN // 2. MRS VINSOVA MICHAELA // 3. MR VINS JAN (junior)"
+  const reTitle=/(\d+)\s*\.\s*(MR|MS|MRS)\.?\s+([A-Za-zÁ-ž]+)\s+([A-Za-zÁ-ž]+(?:\s+\([^)]+\))?)/gi;
+  while((m=reTitle.exec(s))){
+    const title=m[2].toUpperCase();
+    out.push({first:m[4].trim(), surname:m[3].trim(), sex:title, title});
   }
   return out;
 }
@@ -341,6 +434,10 @@ function parseGuestsFromClients(clients){
 
   for(let i=start;i<clients.length;i++){
     const row=clients[i];
+    const rowBlob=norm((row||[]).slice(0,8).join(' '));
+    if(/^(PAYMENTS|PLATBY)\b/.test(rowBlob) || /\bPAYMENTS\b/.test(cell(row,0))) break;
+    // Payment ledgers after the guest block (long numeric ids)
+    if(/^\d{5,}$/.test(cell(row,0)) && !cell(row, cols.sex)) break;
     let first=cell(row, cols.first);
     let surname=cell(row, cols.surname);
     let sex=cell(row, cols.sex);
@@ -350,7 +447,7 @@ function parseGuestsFromClients(clients){
       surname=cell(row, cols.first+2);
       sex=cell(row, cols.first+3);
     }
-    if(!first && !surname) break;
+    if(!first && !surname) continue; // blank spacer rows (do not stop early)
     if(/platby|payment|^mail$|^notes?$/i.test(first)) break;
     if(/^(name|surname|sex|no|stt)$/i.test(first)) continue;
     let title='';
@@ -363,38 +460,84 @@ function parseGuestsFromClients(clients){
 
 function parseSummary(wb, hotels){
   const flags=[];
-  const sum=sheetMatrix(wb,'Summary');
-  const clients=sheetMatrix(wb,'Clients + Rooming list');
+  const sum=loadSummarySheet(wb);
+  const clients=loadClientsSheet(wb);
   // guests from Clients sheet (layouts vary: Name|Surname|Sex OR No|Name|Surname|Sex|...)
   const guests=parseGuestsFromClients(clients);
-  const gtBlob=[0,1,2].flatMap(r=>[cell(sum[r],0),cell(sum[r],1)]).filter(Boolean).join(' ');
+  const gtBlob=[0,1,2].flatMap(r=>(sum[r]||[]).map(v=>String(v||'').trim()).filter(Boolean)).join(' ');
+  const gt=parseGuestsFromGt(gtBlob);
+  const baseFirst=s=>norm(String(s||'').replace(/\(.*?\)/g,' ')).replace(/\b(JUNIOR|JR|SENIOR|SR)\b/g,'').replace(/\s+/g,' ').trim();
   if(!guests.length){
-    for(const g of parseGuestsFromGt(gtBlob)) guests.push(g);
-  } else if(gtBlob){
-    // Prefer MR/MS/MRS from GT when surname matches (Clients often only has M/F)
-    const gt=parseGuestsFromGt(gtBlob);
+    for(const g of gt) guests.push(g);
+  } else {
+    const used=new Set();
+    const take=(pred)=>{
+      const i=gt.findIndex((x,idx)=>!used.has(idx) && pred(x));
+      if(i<0) return null;
+      used.add(i);
+      return gt[i];
+    };
+    // 1) exact first+surname, 2) same person with junior/suffix spelling
     for(const g of guests){
-      const hit=gt.find(x=>(norm(x.surname)===norm(g.surname)) || (norm(x.first)===norm(g.first)));
-      if(hit && hit.title) g.title=hit.title;
+      let hit=take(x=>norm(x.surname)===norm(g.surname) && norm(x.first)===norm(g.first));
+      if(!hit) hit=take(x=>norm(x.surname)===norm(g.surname) && baseFirst(x.first)===baseFirst(g.first));
+      if(!hit && !g.surname) hit=take(x=>norm(x.first)===norm(g.first));
+      if(hit){
+        if(hit.title) g.title=hit.title;
+        if(/\(.*junior|\bjunior\b/i.test(hit.first) && !/junior/i.test(g.first))
+          g.first=(g.first+' (junior)').replace(/\s+/g,' ').trim();
+      }
+    }
+    for(let i=0;i<gt.length;i++){
+      if(used.has(i)) continue;
+      const g=gt[i];
+      const already=guests.some(x=>norm(x.surname)===norm(g.surname) && baseFirst(x.first)===baseFirst(g.first));
+      if(!already) guests.push(g);
     }
   }
   const surname=guests[0]?.surname||'';
   // voucher line: "1. MR SURNAME FIRST" (full name, no stray index)
   const gl=guests.map((g,i)=>formatGuestLine(i+1,g));
 
-  // header fields
-  let contact='';
-  for(const row of sum.slice(0,15)){
-    const all=row.join(' ');
-    const m=all.match(/David[^:]*:\s*(\+?[\d\s]+)/i)||all.match(/contact:\s*([^]+)/i);
-    if(/Guide contact/i.test(all)||/David:/i.test(all)){
-      const mm=all.match(/David:\s*([\+\d\s]+)/i);
-      if(mm) contact=`David Vu, tel. ${mm[1].trim()}`;
+  // header fields — never invent a default HDV; prefer guide phone over pax/responsible
+  const cleanContact=s=>{
+    let v=String(s||'').trim();
+    v=v.replace(/^["']+/,'').replace(/^="/,'+').replace(/^=/,'');
+    if(/^420\b/.test(v) && !/^\+/.test(v)) v='+'+v;
+    return v.trim();
+  };
+  let guideContact='', paxContact='', responsible='', davidPhone='';
+  for(const row of sum.slice(0,25)){
+    const label=cell(row,0);
+    const rest=(row||[]).slice(1).map(v=>String(v||'').trim()).filter(Boolean).join(' ');
+    const all=[label,rest].filter(Boolean).join(' ');
+    const dm=all.match(/David:\s*([+\d\s./-]{7,})/i);
+    if(dm) davidPhone=dm[1].trim();
+    if(/guide\s*contact|\bHDV\b/i.test(all) && !/contract/i.test(label)){
+      if(dm) guideContact=`David Vu, tel. ${dm[1].trim()}`;
+      else if(/guide\s*contact\s*:\s*(.+)$/i.test(all))
+        guideContact=cleanContact((all.match(/guide\s*contact\s*:\s*(.+)$/i)||[])[1]);
     }
+    if(/pax\s*contact/i.test(label) && rest) paxContact=cleanContact(rest);
+    if(/Responsible person|Nguoi phu trach|Người phụ trách/i.test(label) && rest) responsible=rest;
   }
-  if(!contact) contact='David Vu, tel. ';
+  let contact='';
+  if(guideContact) contact=guideContact;
+  else if(davidPhone) contact=`David Vu, tel. ${davidPhone}`;
+  else if(paxContact) contact=paxContact;
+  else if(responsible){
+    contact=responsible;
+    flags.push({level:'warn', msg:`Thiếu số điện thoại HDV trong summary — chỉ có người phụ trách: ${responsible}`});
+  } else {
+    flags.push({level:'warn', msg:'Thiếu thông tin HDV / contact trong summary — điền ô liên hệ trước khi in.'});
+  }
 
-  const pax=(()=>{for(const r of sum){if(/SOLD PAX/i.test(cell(r,0))) return cell(r,1)||String(guests.length);} return String(guests.length);})();
+  const pax=(()=>{
+    for(const r of sum){
+      if(/SOLD\s*PAX/i.test(cell(r,0))) return cell(r,1)||String(guests.length);
+    }
+    return String(guests.length);
+  })();
 
   // flights
   const flights=[];
@@ -456,7 +599,10 @@ function parseSummary(wb, hotels){
       }
       const cinP=parseDayMon(cin), coutP=parseDayMon(cout);
       let check_out=coutP.dayMon||cout;
-      if(coutP.late) check_out=(coutP.dayMon||cout.replace(/-.*/,'').trim())+'\n+ Late check out';
+      if(coutP.late){
+        const base=coutP.dayMon||String(cout).replace(/[-+].*/,'').trim();
+        check_out=base+'\n+ Late check out'+(coutP.until?(' until '+coutP.until.trim()):'');
+      }
       const h=matchHotel(hotels, hotel);
       const cityKey=canonicalCity(city) || norm(city).replace(/ HOMESTAY$/,'');
       if(!h) flags.push({level:'warn', msg:`Chưa có địa chỉ khách sạn: ${hotel||city}`});
@@ -699,6 +845,11 @@ function parseSummary(wb, hotels){
     if(r.is_train && r.missing)
       flags.push({level:'warn', msg:`Dòng tàu còn ?? — thay bằng giờ thật trước khi in.`});
   }
+
+  if(!gl.length) flags.push({level:'warn', msg:'Không tìm thấy danh sách khách trong file (sheet Clients / dòng GT).'});
+  if(!acc_rows.length) flags.push({level:'warn', msg:'Không tìm thấy bảng khách sạn / tàu (mục Accommodation) trong file tổng hợp.'});
+  if(!trf_rows.length) flags.push({level:'warn', msg:'Không tìm thấy bảng transfer / tour (mục Transport) trong file tổng hợp.'});
+  if(!sum.length) flags.push({level:'warn', msg:'Không tìm thấy sheet Summary (tên sheet có thể khác — hãy kiểm tra file).'});
 
   return {
     update_date: todayVN(),

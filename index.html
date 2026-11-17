@@ -375,6 +375,10 @@ I.vi.h_resolved='đã xử lý';I.en.h_resolved='resolved';
 I.vi.h_unresolved='còn mở';I.en.h_unresolved='open';
 I.vi.h_admin='Phản hồi';I.en.h_admin='Reply';
 
+
+I.vi.vempty='Không tìm thấy đủ dữ liệu trong file. Thiếu: %s. Kiểm tra tên sheet (Summary / Clients) và các mục Accommodation, Transport.';
+I.en.vempty='Could not find enough data in this file. Missing: %s. Check sheet names (Summary / Clients) and the Accommodation / Transport sections.';
+
 I.vi.brand='DocGen';I.en.brand='DocGen';
 I.vi.nofile='Chưa chọn file';I.en.nofile='No file chosen';
 
@@ -532,7 +536,17 @@ async function vExtract(){
     v_update.value=VDATA.update_date; v_pax.value=VDATA.pax; v_contact.value=VDATA.contact; v_guests.value=VDATA.guests.join('\n');
     drawVacc(); drawVtrf();
     setStep(2);
-    toast(LANG==='vi'?'Đã đọc xong — kiểm tra ô vàng trước khi tạo file.':'Parsed — review highlighted fields before generate.','ok');
+    const missing=[];
+    if(!(VDATA.guests||[]).length) missing.push(LANG==='vi'?'danh sách khách':'guest list');
+    if(!(VDATA.acc_rows||[]).length) missing.push(LANG==='vi'?'bảng khách sạn/tàu':'hotels/train table');
+    if(!(VDATA.trf_rows||[]).length) missing.push(LANG==='vi'?'bảng transfer/tour':'transfers table');
+    if(missing.length){
+      const msg=(t('vempty')||I.vi.vempty).replace('%s', missing.join(', '));
+      toast(msg,'warn');
+      vinfo.textContent=msg;
+    } else {
+      toast(LANG==='vi'?'Đã đọc xong — kiểm tra ô vàng trước khi tạo file.':'Parsed — review highlighted fields before generate.','ok');
+    }
     const rc=document.getElementById('reviewCard'); if(rc) rc.scrollIntoView({behavior:'smooth',block:'start'});
   }catch(e){
     console.error(e);
